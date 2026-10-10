@@ -1,0 +1,99 @@
+name: iOS build
+
+# Builds an unsigned eDoc.ipa on a cloud Mac. The file is signed and installed
+# on the iPhone from Windows with Sideloadly.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Generate the native project
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: ios/Pods
+          key: pods-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install pods
+        run: cd ios && pod install
+
+      - name: Build
+        run: |
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          set +e
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            > xcodebuild.log 2>&1
+          STATUS=$?
+          set -e
+          grep -E "error:|\*\* BUILD" xcodebuild.log | tail -80 || true
+          exit $STATUS
+
+      - name: Package the IPA
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          test -n "$APP"
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry eDoc.ipa Payload
+          ls -lh eDoc.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eDoc-ipa
+          path: eDoc.ipa
+
+      - name: Publish as the latest download
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: eDoc (latest build)
+          body: Build ${{ github.run_number }} from ${{ github.sha }}
+          files: eDoc.ipa
+          make_latest: true
+
+      - name: Keep the build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log

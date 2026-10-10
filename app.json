@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "eDoc",
+    "slug": "edoc",
+    "scheme": "edoc",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
+    "ios": {
+      "bundleIdentifier": "app.edoc.documents",
+      "supportsTablet": false,
+      "infoPlist": {
+        "CFBundleDisplayName": "eDoc",
+        "NSCameraUsageDescription": "eDoc uses the camera to scan your documents.",
+        "NSFaceIDUsageDescription": "eDoc uses Face ID to keep your documents private.",
+        "NSPhotoLibraryUsageDescription": "eDoc imports the photos you choose as documents.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-image",
+      "expo-sharing",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "imageWidth": 132,
+          "backgroundColor": "#000000"
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-font"
+    ]
+  }
+}
