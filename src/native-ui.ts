@@ -31,6 +31,28 @@ export function promptText(title: string, initial: string, onSubmit: (value: str
   );
 }
 
+// Native prompt with a hidden text field, for backup passwords.
+export function promptSecret(
+  title: string,
+  message: string | undefined,
+  onSubmit: (value: string) => void,
+  onCancel?: () => void,
+) {
+  if (!isIOS) {
+    onSubmit('');
+    return;
+  }
+  Alert.prompt(
+    title,
+    message,
+    [
+      { text: 'Cancel', style: 'cancel', onPress: onCancel },
+      { text: 'Continue', onPress: (value?: string) => onSubmit(value ?? '') },
+    ],
+    'secure-text',
+  );
+}
+
 export function confirmDelete(title: string, message: string | undefined, onConfirm: () => void) {
   if (!isIOS) {
     onConfirm();

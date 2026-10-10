@@ -45,8 +45,19 @@ export function docDir(docId: string) {
   return new Directory(filesDir, docId);
 }
 
-export function pageUri(docId: string, file: string) {
-  return new File(filesDir, docId, file).uri;
+export type DocRef = { id: string; protected?: boolean };
+
+// Pages of a protected document are stored under the same name plus ".enc".
+export function diskName(doc: DocRef, file: string) {
+  return doc.protected ? `${file}.enc` : file;
+}
+
+export function pageFile(doc: DocRef, file: string) {
+  return new File(filesDir, doc.id, diskName(doc, file));
+}
+
+export function pageUri(doc: DocRef, file: string) {
+  return pageFile(doc, file).uri;
 }
 
 export function clearTemp() {

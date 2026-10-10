@@ -10,11 +10,19 @@ import { ExpiryPill, formatDate, pageCount, tagIcons } from './ui';
 
 export function Thumb({ doc, style }: { doc: Doc; style?: StyleProp<ViewStyle> }) {
   const first = doc.pages[0];
+  // Protected documents never show a preview in lists.
+  if (doc.protected) {
+    return (
+      <View style={[styles.thumb, styles.thumbLocked, style]}>
+        <Icon name="lock.fill" size={18} color={colors.accentSoft} weight="semibold" />
+      </View>
+    );
+  }
   return (
     <View style={[styles.thumb, style]}>
       {first ? (
         <Image
-          source={{ uri: pageUri(doc.id, first.file) }}
+          source={{ uri: pageUri(doc, first.file) }}
           recyclingKey={first.file}
           cachePolicy="memory"
           contentFit="cover"
@@ -135,6 +143,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderCurve: 'continuous',
     overflow: 'hidden',
+  },
+  thumbLocked: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: withAlpha(colors.accent, 0.1),
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: withAlpha(colors.accentSoft, 0.3),
   },
   tileCell: {
     flex: 1,

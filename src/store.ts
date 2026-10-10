@@ -33,7 +33,7 @@ const emptyLibrary: Library = {
   version: 1,
   folders: [],
   docs: [],
-  settings: { faceId: false, deviceBackup: false },
+  settings: { faceId: false, deviceBackup: false, protectNew: false },
 };
 
 export function newId() {

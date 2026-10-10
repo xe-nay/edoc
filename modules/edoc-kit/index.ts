@@ -16,6 +16,14 @@ type EdocKitModule = {
   recognizeText(uri: string): Promise<string>;
   // quarterTurns rotates clockwise in 90 degree steps; maxDimension 0 keeps the size.
   render(uri: string, outUri: string, quarterTurns: number, filter: KitFilter, maxDimension: number): Promise<KitPage>;
+  // Files whose name ends in ".enc" are encrypted with a key kept in this iPhone's keychain.
+  // Every function below reads and writes such files transparently.
+  transcode(uri: string, outUri: string): Promise<void>;
+  // Base64 JPEG, decrypted in memory only. maxDimension 0 keeps the stored size.
+  readImage(uri: string, maxDimension: number): Promise<string>;
+  isSealedArchive(uri: string): Promise<boolean>;
+  sealArchive(uri: string, outUri: string, password: string): Promise<void>;
+  openArchive(uri: string, outUri: string, password: string): Promise<void>;
   pdfToImages(uri: string, outDir: string): Promise<KitPage[]>;
   makePdf(uris: string[], outUri: string): Promise<string>;
 };

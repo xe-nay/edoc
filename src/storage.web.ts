@@ -59,10 +59,10 @@ const folders: Folder[] = [
 const demo: Library = {
   version: 1,
   folders,
-  settings: { faceId: false, deviceBackup: false },
+  settings: { faceId: false, deviceBackup: false, protectNew: false },
   docs: [
     demoDoc('d1', 'Passport', '#3D7BFF', 2, { folderId: 'f1', tag: 'personal', expiresAt: midnight + day * 21, favorite: true }),
-    demoDoc('d2', 'Employment contract', '#6E5BFF', 6, { folderId: 'f2', tag: 'professional' }),
+    demoDoc('d2', 'Employment contract', '#6E5BFF', 6, { folderId: 'f2', tag: 'professional', protected: true }),
     demoDoc('d3', 'Lease agreement', '#2DD4BF', 9, { folderId: 'f3', tag: 'personal', expiresAt: midnight + day * 64 }),
     demoDoc('d4', 'Invoice 2026-041', '#FFB547', 1, { folderId: 'f4', tag: 'professional' }),
     demoDoc('d5', 'Driving licence', '#3D7BFF', 2, { folderId: 'f1', tag: 'personal', expiresAt: midnight + day * 5 }),
@@ -83,8 +83,10 @@ export function loadJson<T>(name: string): T | null {
 
 export function saveJson(_name: string, _value: unknown) {}
 
-export function pageUri(docId: string, file: string) {
-  return pages[`${docId}/${file}`] ?? '';
+export type DocRef = { id: string; protected?: boolean };
+
+export function pageUri(doc: DocRef, file: string) {
+  return pages[`${doc.id}/${file}`] ?? '';
 }
 
 export function clearTemp() {}

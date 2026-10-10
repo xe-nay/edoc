@@ -1,6 +1,7 @@
 // Browser stand-in used only for the design preview: device features do nothing.
+import { pageUri, type DocRef } from './storage';
 import { useStore } from './store';
-import type { PageFilter, Tag } from './types';
+import type { Page, PageFilter, Tag } from './types';
 
 export type Target = {
   folderId: string | null;
@@ -78,10 +79,37 @@ export function queueText(_onlyDocId?: string) {}
 
 export async function secureStorage() {}
 
-export async function exportBackup() {}
+export const MIN_PASSWORD_LENGTH = 8;
 
-export async function restoreBackup(): Promise<boolean> {
-  return false;
+export async function loadProtectedImage(doc: DocRef, file: string, _maxDimension: number) {
+  return pageUri(doc, file);
 }
+
+export async function recognizePage(_doc: DocRef, _page: Page) {
+  return 'EMPLOYMENT CONTRACT\nBetween the undersigned parties\nArticle 1 - Purpose';
+}
+
+export async function setProtected(docId: string, value: boolean) {
+  useStore.getState().updateDoc(docId, { protected: value });
+}
+
+export function hasProtectedDocs() {
+  return useStore.getState().docs.some((doc) => doc.protected);
+}
+
+export type PickedBackup = {
+  uri: string;
+  sealed: boolean;
+};
+
+export async function exportBackup(_password: string | null) {}
+
+export async function pickBackup(): Promise<PickedBackup | null> {
+  return null;
+}
+
+export function discardBackup(_picked: PickedBackup) {}
+
+export async function restoreBackup(_picked: PickedBackup, _password: string | null) {}
 
 export function resetTemp() {}

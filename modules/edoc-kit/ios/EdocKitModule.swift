@@ -206,7 +206,7 @@ public class EdocKitModule: Module {
 
     // On-device text recognition for one image file.
     AsyncFunction("recognizeText") { (uri: String) -> String in
-      guard let image = UIImage(contentsOfFile: fileURL(uri).path), let cgImage = image.cgImage else {
+      guard let image = UIImage(data: try Vault.read(fileURL(uri))), let cgImage = image.cgImage else {
         throw Exception(name: "ERR_IMAGE_READ", description: "Cannot read image")
       }
       let request = VNRecognizeTextRequest()
@@ -234,7 +234,7 @@ public class EdocKitModule: Module {
     // Re-encodes an image as an upright JPEG, optionally resized, rotated and filtered.
     AsyncFunction("render") {
       (uri: String, outUri: String, quarterTurns: Int, filter: String, maxDimension: Double) -> [String: Any] in
-      guard let source = UIImage(contentsOfFile: fileURL(uri).path) else {
+      guard let source = UIImage(data: try Vault.read(fileURL(uri))) else {
         throw Exception(name: "ERR_IMAGE_READ", description: "Cannot read image")
       }
       let upright = redraw(source, maxDimension: CGFloat(maxDimension), quarterTurns: quarterTurns)
@@ -243,12 +243,40 @@ public class EdocKitModule: Module {
         throw Exception(name: "ERR_IMAGE_WRITE", description: "Cannot encode image")
       }
       let out = fileURL(outUri)
-      try FileManager.default.createDirectory(
-        at: out.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-      )
-      try data.write(to: out, options: .atomic)
+      try Vault.write(data, to: out)
       return pageInfo(out, Int(result.size.width), Int(result.size.height))
+    }
+
+    // Copies a file, decrypting the source and encrypting the destination as their names require.
+    AsyncFunction("transcode") { (uri: String, outUri: String) in
+      try Vault.write(try Vault.read(fileURL(uri)), to: fileURL(outUri))
+    }
+
+    // Returns an image as base64 JPEG without writing a decrypted copy to disk.
+    // maxDimension 0 returns the stored image unchanged.
+    AsyncFunction("readImage") { (uri: String, maxDimension: Double) -> String in
+      let data = try Vault.read(fileURL(uri))
+      if maxDimension > 0, let image = UIImage(data: data) {
+        let small = redraw(image, maxDimension: CGFloat(maxDimension), quarterTurns: 0)
+        if let jpeg = small.jpegData(compressionQuality: 0.7) {
+          return jpeg.base64EncodedString()
+        }
+      }
+      return data.base64EncodedString()
+    }
+
+    AsyncFunction("isSealedArchive") { (uri: String) -> Bool in
+      return Vault.isSealedArchive(fileURL(uri))
+    }
+
+    // Encrypts a backup archive with a password.
+    AsyncFunction("sealArchive") { (uri: String, outUri: String, password: String) in
+      try Vault.sealArchive(from: fileURL(uri), to: fileURL(outUri), password: password)
+    }
+
+    // Decrypts a password-protected backup archive; fails on a wrong password.
+    AsyncFunction("openArchive") { (uri: String, outUri: String, password: String) in
+      try Vault.openArchive(from: fileURL(uri), to: fileURL(outUri), password: password)
     }
 
     // Rasterises every page of a PDF to a JPEG in outDir.
@@ -310,8 +338,8 @@ public class EdocKitModule: Module {
       try renderer.writePDF(to: out) { context in
         for uri in uris {
           autoreleasepool {
-            let url = fileURL(uri)
-            guard let provider = CGDataProvider(url: url as CFURL),
+            guard let data = try? Vault.read(fileURL(uri)),
+              let provider = CGDataProvider(data: data as CFData),
               let image = CGImage(
                 jpegDataProviderSource: provider,
                 decode: nil,

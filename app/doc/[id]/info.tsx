@@ -1,12 +1,13 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
-import { setExpiry } from '../../../src/actions';
+import { setExpiry, setProtected } from '../../../src/actions';
 import { Icon, type IconName } from '../../../src/components/Icon';
 import { Chip, formatDate, pageCount, tagIcons, tagLabels } from '../../../src/components/ui';
 import { askDelete, askMove, askRename } from '../../../src/doc-menu';
-import { showError } from '../../../src/native-ui';
+import { showError, success } from '../../../src/native-ui';
 import { useStore } from '../../../src/store';
 import { colors, radius, space } from '../../../src/theme';
 import type { Tag } from '../../../src/types';
@@ -42,10 +43,23 @@ export default function InfoSheet() {
   const router = useRouter();
   const doc = useStore((state) => state.docs.find((item) => item.id === id));
   const folder = useStore((state) => state.folders.find((item) => item.id === doc?.folderId));
+  const [protecting, setProtecting] = useState(false);
 
   if (!doc) {
     return <View style={styles.fill} />;
   }
+
+  const toggleProtected = async (next: boolean) => {
+    setProtecting(true);
+    try {
+      await setProtected(doc.id, next);
+      success();
+    } catch (error) {
+      showError(error);
+    } finally {
+      setProtecting(false);
+    }
+  };
 
   const update = useStore.getState().updateDoc;
   const tomorrow = new Date();
@@ -115,14 +129,26 @@ export default function InfoSheet() {
             </>
           )}
         </Row>
-        <Row icon="star.fill" label="Favorite" last>
+        <Row icon="star.fill" label="Favorite">
           <Switch
             value={doc.favorite}
             onValueChange={(favorite) => update(doc.id, { favorite })}
             trackColor={{ true: colors.accent }}
           />
         </Row>
+        <Row icon="lock.fill" label="Protected" last>
+          {protecting ? (
+            <ActivityIndicator color={colors.textDim} />
+          ) : (
+            <Switch value={Boolean(doc.protected)} onValueChange={toggleProtected} trackColor={{ true: colors.accent }} />
+          )}
+        </Row>
       </View>
+      {doc.protected ? (
+        <Text style={styles.footnote}>
+          Pages are encrypted with a key that exists only on this iPhone. Search finds this document by name only.
+        </Text>
+      ) : null}
       {doc.expiresAt !== null ? (
         <Text style={styles.footnote}>Reminders 30 days before, 7 days before and on the day.</Text>
       ) : null}

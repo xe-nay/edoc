@@ -13,7 +13,7 @@ Pod::Spec.new do |s|
   s.swift_version  = '5.9'
 
   s.dependency 'ExpoModulesCore'
-  s.frameworks = 'VisionKit', 'Vision', 'PDFKit', 'CoreImage'
+  s.frameworks = 'VisionKit', 'Vision', 'PDFKit', 'CoreImage', 'CryptoKit', 'Security'
 
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {

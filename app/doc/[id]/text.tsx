@@ -1,6 +1,8 @@
 import { useLocalSearchParams } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
+import { recognizePage } from '../../../src/actions';
 import { Icon } from '../../../src/components/Icon';
 import { useStore } from '../../../src/store';
 import { colors, space, withAlpha } from '../../../src/theme';
@@ -9,15 +11,42 @@ import { colors, space, withAlpha } from '../../../src/theme';
 export default function TextSheet() {
   const params = useLocalSearchParams<{ id: string; page?: string }>();
   const doc = useStore((state) => state.docs.find((item) => item.id === params.id));
-  const text = useStore((state) => state.text);
+  const stored = useStore((state) => state.text);
   const index = Number(params.page ?? 0);
   const page = doc?.pages[index] ?? doc?.pages[0];
+  const isProtected = Boolean(doc?.protected);
+  const docId = doc?.id;
+  // For protected documents the text is recognised here and kept in memory only.
+  const [live, setLive] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!isProtected || !docId || !page) {
+      return;
+    }
+    let active = true;
+    recognizePage({ id: docId, protected: true }, page)
+      .then((value) => {
+        if (active) {
+          setLive(value);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setLive('');
+        }
+      });
+    return () => {
+      active = false;
+    };
+    // Keyed on the stored file so an unrelated library update does not repeat the recognition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isProtected, docId, page?.file]);
 
   if (!doc || !page) {
     return <View style={styles.fill} />;
   }
 
-  const value = text[page.id];
+  const value = isProtected ? live : stored[page.id];
   const pending = value === undefined;
 
   return (

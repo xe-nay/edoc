@@ -25,6 +25,8 @@ export type Doc = {
   // Local midnight of the expiry day.
   expiresAt: number | null;
   reminderIds: string[];
+  // Pages are stored encrypted with a key that only exists in this iPhone's keychain.
+  protected?: boolean;
 };
 
 export type Folder = {
@@ -38,6 +40,8 @@ export type Settings = {
   faceId: boolean;
   // When false, documents are left out of iCloud and computer backups of the iPhone.
   deviceBackup: boolean;
+  // Newly scanned and imported documents are protected straight away.
+  protectNew: boolean;
 };
 
 export type Library = {

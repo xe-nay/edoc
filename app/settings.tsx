@@ -2,13 +2,27 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
-import { exportBackup, restoreBackup, secureStorage } from '../src/actions';
+import {
+  discardBackup,
+  exportBackup,
+  hasProtectedDocs,
+  MIN_PASSWORD_LENGTH,
+  pickBackup,
+  restoreBackup,
+  secureStorage,
+  type PickedBackup,
+} from '../src/actions';
 import { Icon, type IconName } from '../src/components/Icon';
 import { Glow, SectionLabel } from '../src/components/ui';
-import { showError, success } from '../src/native-ui';
+import { promptSecret, showError, success } from '../src/native-ui';
 import { storageBytes } from '../src/storage';
 import { useStore } from '../src/store';
 import { colors, radius, space } from '../src/theme';
+
+// Lets the current native dialog finish dismissing before the next one appears.
+function later(action: () => void) {
+  setTimeout(action, 400);
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) {
@@ -49,6 +63,7 @@ function Row({
 export default function SettingsScreen() {
   const faceId = useStore((state) => state.settings.faceId);
   const deviceBackup = useStore((state) => state.settings.deviceBackup);
+  const protectNew = useStore((state) => state.settings.protectNew);
   const count = useStore((state) => state.docs.length);
   const [busy, setBusy] = useState<'export' | 'restore' | null>(null);
 
@@ -74,10 +89,10 @@ export default function SettingsScreen() {
     }
   };
 
-  const runExport = async () => {
+  const doExport = async (password: string | null) => {
     setBusy('export');
     try {
-      await exportBackup();
+      await exportBackup(password);
     } catch (error) {
       showError(error);
     } finally {
@@ -85,25 +100,75 @@ export default function SettingsScreen() {
     }
   };
 
+  // The password is asked twice: a typo would make the backup impossible to open.
+  const runExport = () => {
+    const required = hasProtectedDocs();
+    const rule = `At least ${MIN_PASSWORD_LENGTH} characters.`;
+    promptSecret(
+      'Backup Password',
+      required ? `${rule} It cannot be recovered.` : `${rule} Leave empty for a backup without encryption.`,
+      (first) => {
+        if (!first && !required) {
+          doExport(null);
+          return;
+        }
+        if (first.length < MIN_PASSWORD_LENGTH) {
+          Alert.alert('Password too short', rule);
+          return;
+        }
+        later(() =>
+          promptSecret('Repeat Password', undefined, (second) => {
+            if (second === first) {
+              doExport(first);
+            } else {
+              Alert.alert('Passwords do not match');
+            }
+          }),
+        );
+      },
+    );
+  };
+
+  const doRestore = async (picked: PickedBackup, password: string | null) => {
+    setBusy('restore');
+    try {
+      await restoreBackup(picked, password);
+      success();
+    } catch (error) {
+      discardBackup(picked);
+      showError(error);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const chooseBackup = async () => {
+    try {
+      const picked = await pickBackup();
+      if (!picked) {
+        return;
+      }
+      if (picked.sealed) {
+        later(() =>
+          promptSecret(
+            'Backup Password',
+            undefined,
+            (password) => doRestore(picked, password),
+            () => discardBackup(picked),
+          ),
+        );
+      } else {
+        doRestore(picked, null);
+      }
+    } catch (error) {
+      showError(error);
+    }
+  };
+
   const runRestore = () => {
     Alert.alert('Restore a backup?', 'Everything currently in eDoc is replaced by the content of the backup.', [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Restore',
-        style: 'destructive',
-        onPress: async () => {
-          setBusy('restore');
-          try {
-            if (await restoreBackup()) {
-              success();
-            }
-          } catch (error) {
-            showError(error);
-          } finally {
-            setBusy(null);
-          }
-        },
-      },
+      { text: 'Restore', style: 'destructive', onPress: () => later(chooseBackup) },
     ]);
   };
 
@@ -114,6 +179,13 @@ export default function SettingsScreen() {
         <View style={styles.group}>
           <Row icon="faceid" label="Face ID">
             <Switch value={faceId} onValueChange={toggleFaceId} trackColor={{ true: colors.accent }} />
+          </Row>
+          <Row icon="lock.fill" label="Protect New Documents">
+            <Switch
+              value={protectNew}
+              onValueChange={(next) => useStore.getState().updateSettings({ protectNew: next })}
+              trackColor={{ true: colors.accent }}
+            />
           </Row>
           <Row icon="icloud" label="Include in iPhone Backups" last>
             <Switch
@@ -143,7 +215,8 @@ export default function SettingsScreen() {
           </Row>
         </View>
         <Text style={styles.footnote}>
-          A backup is one file with every document, not encrypted. Deleting the app deletes its documents.
+          A backup is one file with every document, encrypted with the password you choose. It is the only way to
+          recover protected documents if this iPhone or the app is lost.
         </Text>
 
         <View style={styles.gap} />

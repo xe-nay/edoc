@@ -1,9 +1,10 @@
-import { Image } from 'expo-image';
+import * as LocalAuthentication from 'expo-local-authentication';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,9 +17,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { scanMorePages, sharePdf } from '../../../src/actions';
 import { BottomBar, HeaderBar } from '../../../src/components/Bars';
+import { Icon } from '../../../src/components/Icon';
+import { PageImage } from '../../../src/components/PageImage';
 import { askDelete, askMove, askRename } from '../../../src/doc-menu';
 import { showError, success, tap } from '../../../src/native-ui';
-import { pageUri } from '../../../src/storage';
 import { useStore } from '../../../src/store';
 import { colors } from '../../../src/theme';
 
@@ -31,8 +33,49 @@ export default function DocScreen() {
   const [index, setIndex] = useState(0);
   const [busy, setBusy] = useState(false);
 
+  // A protected document asks for Face ID (or the passcode) when the app-wide lock is off.
+  const appLock = useStore((state) => state.settings.faceId);
+  const guarded = Platform.OS === 'ios' && Boolean(doc?.protected) && !appLock;
+  const [unlocked, setUnlocked] = useState(!guarded);
+
+  useEffect(() => {
+    if (unlocked) {
+      return;
+    }
+    let active = true;
+    (async () => {
+      const level = await LocalAuthentication.getEnrolledLevelAsync();
+      // Nothing to ask for on an iPhone without a passcode.
+      const allowed =
+        level === LocalAuthentication.SecurityLevel.NONE ||
+        (await LocalAuthentication.authenticateAsync({ promptMessage: 'Open protected document' })).success;
+      if (!active) {
+        return;
+      }
+      if (allowed) {
+        setUnlocked(true);
+      } else {
+        router.back();
+      }
+    })().catch(() => {
+      if (active) {
+        router.back();
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [unlocked, router]);
+
   if (!doc) {
     return <View style={styles.fill} />;
+  }
+  if (!unlocked) {
+    return (
+      <View style={[styles.fill, styles.locked]}>
+        <Icon name="lock.fill" size={34} color={colors.accentSoft} weight="semibold" />
+      </View>
+    );
   }
 
   // Space kept clear for the navigation bar above and the toolbar below.
@@ -99,10 +142,9 @@ export default function DocScreen() {
               showsHorizontalScrollIndicator={false}
               showsVerticalScrollIndicator={false}
               contentInsetAdjustmentBehavior="never">
-              <Image
-                source={{ uri: pageUri(doc.id, item.file) }}
-                cachePolicy="memory"
-                contentFit="contain"
+              <PageImage
+                doc={doc}
+                page={item}
                 style={[styles.sheet, { width: item.width * scale, height: item.height * scale }]}
               />
             </ScrollView>
@@ -165,6 +207,10 @@ const styles = StyleSheet.create({
   fill: {
     flex: 1,
     backgroundColor: colors.black,
+  },
+  locked: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   page: {
     alignItems: 'center',

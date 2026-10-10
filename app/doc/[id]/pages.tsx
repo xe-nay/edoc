@@ -1,4 +1,3 @@
-import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -6,8 +5,8 @@ import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from '
 import { deletePage, movePage, rotatePage, scanMorePages, setPageFilter } from '../../../src/actions';
 import { BottomBar } from '../../../src/components/Bars';
 import type { BarAction } from '../../../src/components/bar-types';
+import { PageImage } from '../../../src/components/PageImage';
 import { confirmDelete, showError, tap } from '../../../src/native-ui';
-import { pageUri } from '../../../src/storage';
 import { useStore } from '../../../src/store';
 import { colors, space, withAlpha } from '../../../src/theme';
 import type { Page, PageFilter } from '../../../src/types';
@@ -102,13 +101,7 @@ export default function PagesScreen() {
           item ? (
             <Pressable style={styles.cell} onPress={() => setSelectedId(item.id)}>
               <View style={[styles.frame, item.id === selectedId && styles.frameSelected]}>
-                <Image
-                  source={{ uri: pageUri(doc.id, item.file) }}
-                  cachePolicy="memory"
-                  contentFit="cover"
-                  contentPosition="top"
-                  style={styles.image}
-                />
+                <PageImage doc={doc} page={item} maxDimension={520} contentFit="cover" style={styles.image} />
               </View>
               <Text style={[styles.number, item.id === selectedId && { color: colors.text }]}>{cellIndex + 1}</Text>
             </Pressable>
