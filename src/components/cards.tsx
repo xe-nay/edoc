@@ -8,13 +8,13 @@ import type { Doc } from '../types';
 import { Icon, type IconName } from './Icon';
 import { ExpiryPill, formatDate, pageCount, tagIcons } from './ui';
 
-export function Thumb({ doc, style }: { doc: Doc; style?: StyleProp<ViewStyle> }) {
+export function Thumb({ doc, style, lockSize = 18 }: { doc: Doc; style?: StyleProp<ViewStyle>; lockSize?: number }) {
   const first = doc.pages[0];
   // Protected documents never show a preview in lists.
   if (doc.protected) {
     return (
       <View style={[styles.thumb, styles.thumbLocked, style]}>
-        <Icon name="lock.fill" size={18} color={colors.accentSoft} weight="semibold" />
+        <Icon name="lock.fill" size={lockSize} color={colors.accentSoft} weight="semibold" />
       </View>
     );
   }
@@ -83,7 +83,7 @@ export function DocCard({ doc, onPress, onLongPress }: DocProps) {
   return (
     <Pressable onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.docCard, pressed && styles.pressed]}>
       <View>
-        <Thumb doc={doc} style={styles.docCardThumb} />
+        <Thumb doc={doc} style={styles.docCardThumb} lockSize={34} />
         <View style={styles.badges}>
           {doc.tag ? (
             <View style={styles.badge}>
