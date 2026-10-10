@@ -1,7 +1,7 @@
 name: iOS build
 
 # Builds an unsigned eDoc.ipa on a cloud Mac. The file is signed and installed
-# on the iPhone from Windows with Sideloadly.
+# on the iPhone from Windows with Sideloadly. Only GitHub's own actions are used.
 on:
   workflow_dispatch:
   push:
@@ -10,7 +10,7 @@ on:
       - '**.md'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -23,9 +23,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
+      - name: Select the newest stable Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
 
       - uses: actions/setup-node@v4
         with:
@@ -81,15 +84,7 @@ jobs:
         with:
           name: eDoc-ipa
           path: eDoc.ipa
-
-      - name: Publish as the latest download
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: eDoc (latest build)
-          body: Build ${{ github.run_number }} from ${{ github.sha }}
-          files: eDoc.ipa
-          make_latest: true
+          retention-days: 14
 
       - name: Keep the build log on failure
         if: failure()
@@ -97,3 +92,4 @@ jobs:
         with:
           name: xcodebuild-log
           path: xcodebuild.log
+          retention-days: 7

@@ -2,7 +2,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
-import { exportBackup, restoreBackup } from '../src/actions';
+import { exportBackup, restoreBackup, secureStorage } from '../src/actions';
 import { Icon, type IconName } from '../src/components/Icon';
 import { Glow, SectionLabel } from '../src/components/ui';
 import { showError, success } from '../src/native-ui';
@@ -48,6 +48,7 @@ function Row({
 
 export default function SettingsScreen() {
   const faceId = useStore((state) => state.settings.faceId);
+  const deviceBackup = useStore((state) => state.settings.deviceBackup);
   const count = useStore((state) => state.docs.length);
   const [busy, setBusy] = useState<'export' | 'restore' | null>(null);
 
@@ -111,10 +112,25 @@ export default function SettingsScreen() {
       <ScrollView contentInsetAdjustmentBehavior="automatic" style={styles.fill} contentContainerStyle={styles.content}>
         <SectionLabel>Privacy</SectionLabel>
         <View style={styles.group}>
-          <Row icon="faceid" label="Face ID" last>
+          <Row icon="faceid" label="Face ID">
             <Switch value={faceId} onValueChange={toggleFaceId} trackColor={{ true: colors.accent }} />
           </Row>
+          <Row icon="icloud" label="Include in iPhone Backups" last>
+            <Switch
+              value={deviceBackup}
+              onValueChange={(next) => {
+                useStore.getState().updateSettings({ deviceBackup: next });
+                secureStorage().catch(showError);
+              }}
+              trackColor={{ true: colors.accent }}
+            />
+          </Row>
         </View>
+        <Text style={styles.footnote}>
+          {deviceBackup
+            ? 'Documents are part of the iCloud and computer backups of this iPhone.'
+            : 'Documents never leave this iPhone, not even in its iCloud or computer backups.'}
+        </Text>
 
         <View style={styles.gap} />
         <SectionLabel>Backup</SectionLabel>
@@ -127,8 +143,7 @@ export default function SettingsScreen() {
           </Row>
         </View>
         <Text style={styles.footnote}>
-          A backup is one file with every document. Keep a copy outside this iPhone: deleting the app deletes its
-          documents.
+          A backup is one file with every document, not encrypted. Deleting the app deletes its documents.
         </Text>
 
         <View style={styles.gap} />
@@ -138,7 +153,7 @@ export default function SettingsScreen() {
             <Text style={styles.value}>{formatBytes(storageBytes())}</Text>
           </Row>
         </View>
-        <Text style={styles.footnote}>Everything stays on this iPhone. eDoc works without a connection.</Text>
+        <Text style={styles.footnote}>eDoc never connects to the internet.</Text>
       </ScrollView>
       <Glow />
     </>

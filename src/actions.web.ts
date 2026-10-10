@@ -76,6 +76,8 @@ export async function renameDoc(docId: string, name: string) {
 
 export function queueText(_onlyDocId?: string) {}
 
+export async function secureStorage() {}
+
 export async function exportBackup() {}
 
 export async function restoreBackup(): Promise<boolean> {

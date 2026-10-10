@@ -104,6 +104,7 @@ export default function PagesScreen() {
               <View style={[styles.frame, item.id === selectedId && styles.frameSelected]}>
                 <Image
                   source={{ uri: pageUri(doc.id, item.file) }}
+                  cachePolicy="memory"
                   contentFit="cover"
                   contentPosition="top"
                   style={styles.image}

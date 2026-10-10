@@ -36,6 +36,8 @@ export type Folder = {
 
 export type Settings = {
   faceId: boolean;
+  // When false, documents are left out of iCloud and computer backups of the iPhone.
+  deviceBackup: boolean;
 };
 
 export type Library = {

@@ -32,15 +32,16 @@ export async function cancelReminders(ids: string[]) {
   await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => {})));
 }
 
+// Document names are deliberately left out: reminders show on the lock screen.
 function reminderBody(lead: number) {
   if (lead === 0) {
-    return 'Expires today';
+    return 'A document expires today';
   }
-  return `Expires in ${lead} days`;
+  return `A document expires in ${lead} days`;
 }
 
 // Replaces the reminders of a document and returns the new notification ids.
-export async function scheduleReminders(doc: Pick<Doc, 'id' | 'name' | 'reminderIds'>, expiresAt: number | null) {
+export async function scheduleReminders(doc: Pick<Doc, 'id' | 'reminderIds'>, expiresAt: number | null) {
   await cancelReminders(doc.reminderIds);
   if (expiresAt === null || !(await ensureReminderPermission())) {
     return [];
@@ -54,7 +55,7 @@ export async function scheduleReminders(doc: Pick<Doc, 'id' | 'name' | 'reminder
     }
     const id = await Notifications.scheduleNotificationAsync({
       content: {
-        title: doc.name,
+        title: 'eDoc',
         body: reminderBody(lead),
         data: { docId: doc.id },
       },

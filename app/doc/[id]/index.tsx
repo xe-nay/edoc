@@ -101,6 +101,7 @@ export default function DocScreen() {
               contentInsetAdjustmentBehavior="never">
               <Image
                 source={{ uri: pageUri(doc.id, item.file) }}
+                cachePolicy="memory"
                 contentFit="contain"
                 style={[styles.sheet, { width: item.width * scale, height: item.height * scale }]}
               />

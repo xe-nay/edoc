@@ -16,6 +16,7 @@ export function Thumb({ doc, style }: { doc: Doc; style?: StyleProp<ViewStyle> }
         <Image
           source={{ uri: pageUri(doc.id, first.file) }}
           recyclingKey={first.file}
+          cachePolicy="memory"
           contentFit="cover"
           contentPosition="top"
           transition={120}

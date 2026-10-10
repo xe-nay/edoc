@@ -59,7 +59,7 @@ const folders: Folder[] = [
 const demo: Library = {
   version: 1,
   folders,
-  settings: { faceId: false },
+  settings: { faceId: false, deviceBackup: false },
   docs: [
     demoDoc('d1', 'Passport', '#3D7BFF', 2, { folderId: 'f1', tag: 'personal', expiresAt: midnight + day * 21, favorite: true }),
     demoDoc('d2', 'Employment contract', '#6E5BFF', 6, { folderId: 'f2', tag: 'professional' }),

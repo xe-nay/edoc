@@ -41,6 +41,7 @@ const previewNames: Partial<Record<IconName, string>> = {
   'folder.badge.plus': 'create_new_folder',
   'arrow.down.doc': 'download',
   externaldrive: 'hard_drive',
+  icloud: 'cloud',
   'arrow.counterclockwise': 'restore',
   'square.grid.2x2': 'grid_view',
   'tag.fill': 'label',

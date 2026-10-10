@@ -11,6 +11,8 @@ export type KitFilter = 'none' | 'enhance' | 'gray' | 'bw';
 type EdocKitModule = {
   // Opens the system document scanner; resolves with [] when cancelled.
   scan(outDir: string): Promise<KitPage[]>;
+  // Encrypts the tree while the device is locked and sets whether backups include it.
+  secure(uri: string, excludeFromBackup: boolean): Promise<void>;
   recognizeText(uri: string): Promise<string>;
   // quarterTurns rotates clockwise in 90 degree steps; maxDimension 0 keeps the size.
   render(uri: string, outUri: string, quarterTurns: number, filter: KitFilter, maxDimension: number): Promise<KitPage>;

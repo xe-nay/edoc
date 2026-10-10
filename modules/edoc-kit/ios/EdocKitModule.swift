@@ -187,6 +187,23 @@ public class EdocKitModule: Module {
       presenter.present(controller, animated: true)
     }.runOnQueue(.main)
 
+    // Hardens a directory tree: files are encrypted by iOS whenever the device is locked,
+    // and the tree is optionally left out of iCloud and computer backups.
+    AsyncFunction("secure") { (uri: String, excludeFromBackup: Bool) in
+      var root = fileURL(uri)
+      let manager = FileManager.default
+      let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.complete]
+      try manager.setAttributes(protection, ofItemAtPath: root.path)
+      if let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: nil) {
+        for case let item as URL in enumerator {
+          try? manager.setAttributes(protection, ofItemAtPath: item.path)
+        }
+      }
+      var values = URLResourceValues()
+      values.isExcludedFromBackup = excludeFromBackup
+      try root.setResourceValues(values)
+    }
+
     // On-device text recognition for one image file.
     AsyncFunction("recognizeText") { (uri: String) -> String in
       guard let image = UIImage(contentsOfFile: fileURL(uri).path), let cgImage = image.cgImage else {

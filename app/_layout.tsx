@@ -3,7 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { Platform, View } from 'react-native';
 
-import { queueText, resetTemp } from '../src/actions';
+import { queueText, resetTemp, secureStorage } from '../src/actions';
 import { LockGate } from '../src/components/LockGate';
 import { useStore } from '../src/store';
 import { colors } from '../src/theme';
@@ -37,6 +37,7 @@ export default function RootLayout() {
   useEffect(() => {
     useStore.getState().hydrate();
     resetTemp();
+    secureStorage().catch(() => {});
     queueText();
   }, []);
 

@@ -6,7 +6,7 @@ import * as Sharing from 'expo-sharing';
 
 import EdocKit, { type KitPage } from '../modules/edoc-kit';
 import { cancelReminders, scheduleReminders } from './reminders';
-import { clearTemp, docDir, ensureDirs, filesDir, pageUri, tempDir } from './storage';
+import { clearTemp, docDir, ensureDirs, filesDir, pageUri, rootDir, tempDir } from './storage';
 import { flushStore, makeDoc, newId, snapshotLibrary, useStore } from './store';
 import type { Doc, Library, Page, PageFilter, Tag, TextIndex } from './types';
 import { bytesToText, createZipWriter, readZipEntries, readZipEntry, textToBytes, type ZipSource } from './zip';
@@ -29,6 +29,27 @@ function findDoc(docId: string) {
 
 function scratchDir() {
   return new Directory(tempDir, newId());
+}
+
+// Removes a working copy as soon as it is no longer needed, so nothing confidential lingers.
+function discard(item: File | Directory | string) {
+  try {
+    const target = typeof item === 'string' ? new File(item) : item;
+    if (target.exists) {
+      target.delete();
+    }
+  } catch {
+    // Left for the clean-up at next launch.
+  }
+}
+
+// Applies device-lock encryption and the backup preference to everything eDoc stores.
+export async function secureStorage() {
+  if (!EdocKit) {
+    return;
+  }
+  ensureDirs();
+  await EdocKit.secure(rootDir.uri, !useStore.getState().settings.deviceBackup);
 }
 
 function stripExtension(name: string) {
@@ -91,11 +112,16 @@ function patchPage(docId: string, pageId: string, patch: Partial<Page>) {
 
 export async function scanDocument(target: Target): Promise<string | null> {
   ensureDirs();
-  const pages = await kit().scan(scratchDir().uri);
-  if (pages.length === 0) {
-    return null;
+  const scratch = scratchDir();
+  try {
+    const pages = await kit().scan(scratch.uri);
+    if (pages.length === 0) {
+      return null;
+    }
+    return createDoc(defaultName('Scan'), pages, target);
+  } finally {
+    discard(scratch);
   }
-  return createDoc(defaultName('Scan'), pages, target);
 }
 
 export async function scanMorePages(docId: string): Promise<number> {
@@ -104,14 +130,19 @@ export async function scanMorePages(docId: string): Promise<number> {
     return 0;
   }
   ensureDirs();
-  const pages = await kit().scan(scratchDir().uri);
-  if (pages.length === 0) {
-    return 0;
+  const scratch = scratchDir();
+  try {
+    const pages = await kit().scan(scratch.uri);
+    if (pages.length === 0) {
+      return 0;
+    }
+    const added = adoptPages(docId, pages);
+    useStore.getState().updateDoc(docId, { pages: [...doc.pages, ...added] });
+    queueText(docId);
+    return added.length;
+  } finally {
+    discard(scratch);
   }
-  const added = adoptPages(docId, pages);
-  useStore.getState().updateDoc(docId, { pages: [...doc.pages, ...added] });
-  queueText(docId);
-  return added.length;
 }
 
 // PDFs become one document each; images picked together become one document.
@@ -125,26 +156,35 @@ export async function importFromFiles(target: Target): Promise<string[]> {
     return [];
   }
   ensureDirs();
+  const scratch = scratchDir();
   const created: string[] = [];
   const images: KitPage[] = [];
   let imagesName: string | null = null;
-  for (const asset of result.assets) {
-    const isPdf = asset.mimeType === 'application/pdf' || asset.name.toLowerCase().endsWith('.pdf');
-    if (isPdf) {
-      const pages = await kit().pdfToImages(asset.uri, scratchDir().uri);
-      if (pages.length > 0) {
-        created.push(createDoc(stripExtension(asset.name), pages, target));
+  try {
+    for (const asset of result.assets) {
+      const isPdf = asset.mimeType === 'application/pdf' || asset.name.toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        const pages = await kit().pdfToImages(asset.uri, new Directory(scratch, newId()).uri);
+        if (pages.length > 0) {
+          created.push(createDoc(stripExtension(asset.name), pages, target));
+        }
+      } else {
+        const out = new File(scratch, `${newId()}.jpg`);
+        images.push(await kit().render(asset.uri, out.uri, 0, 'none', 3200));
+        imagesName = imagesName ?? stripExtension(asset.name);
       }
-    } else {
-      const out = new File(scratchDir(), 'image.jpg');
-      images.push(await kit().render(asset.uri, out.uri, 0, 'none', 3200));
-      imagesName = imagesName ?? stripExtension(asset.name);
     }
+    if (images.length > 0) {
+      created.push(createDoc(imagesName ?? defaultName('Import'), images, target));
+    }
+    return created;
+  } finally {
+    // The picker hands over copies in the cache; they are not kept.
+    for (const asset of result.assets) {
+      discard(asset.uri);
+    }
+    discard(scratch);
   }
-  if (images.length > 0) {
-    created.push(createDoc(imagesName ?? defaultName('Import'), images, target));
-  }
-  return created;
 }
 
 export async function importFromPhotos(target: Target): Promise<string | null> {
@@ -158,12 +198,20 @@ export async function importFromPhotos(target: Target): Promise<string | null> {
     return null;
   }
   ensureDirs();
+  const scratch = scratchDir();
   const images: KitPage[] = [];
-  for (const asset of result.assets) {
-    const out = new File(scratchDir(), 'image.jpg');
-    images.push(await kit().render(asset.uri, out.uri, 0, 'none', 3200));
+  try {
+    for (const asset of result.assets) {
+      const out = new File(scratch, `${newId()}.jpg`);
+      images.push(await kit().render(asset.uri, out.uri, 0, 'none', 3200));
+    }
+    return createDoc(defaultName('Photo'), images, target);
+  } finally {
+    for (const asset of result.assets) {
+      discard(asset.uri);
+    }
+    discard(scratch);
   }
-  return createDoc(defaultName('Photo'), images, target);
 }
 
 // --- Exporting --------------------------------------------------------------
@@ -174,12 +222,17 @@ export async function sharePdf(docId: string) {
     return;
   }
   ensureDirs();
-  const out = new File(scratchDir(), `${safeFileName(doc.name)}.pdf`);
-  await kit().makePdf(
-    doc.pages.map((page) => pageUri(doc.id, page.file)),
-    out.uri,
-  );
-  await Sharing.shareAsync(out.uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
+  const scratch = scratchDir();
+  const out = new File(scratch, `${safeFileName(doc.name)}.pdf`);
+  try {
+    await kit().makePdf(
+      doc.pages.map((page) => pageUri(doc.id, page.file)),
+      out.uri,
+    );
+    await Sharing.shareAsync(out.uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
+  } finally {
+    discard(scratch);
+  }
 }
 
 // --- Page tools -------------------------------------------------------------
@@ -281,11 +334,6 @@ export async function renameDoc(docId: string, name: string) {
     return;
   }
   useStore.getState().updateDoc(docId, { name: trimmed });
-  if (doc.expiresAt !== null) {
-    // Reminders carry the document name, so they are rebuilt.
-    const reminderIds = await scheduleReminders({ ...doc, name: trimmed }, doc.expiresAt);
-    useStore.getState().updateDoc(docId, { reminderIds });
-  }
 }
 
 // --- Text recognition -------------------------------------------------------
@@ -319,7 +367,8 @@ export function queueText(onlyDocId?: string) {
           const value = await module.recognizeText(pageUri(doc.id, current.original ?? current.file));
           useStore.getState().setText(page.id, value);
         } catch {
-          useStore.getState().setText(page.id, '');
+          // Not recorded, so the page is tried again at the next launch
+          // (files cannot be read while the iPhone is locked).
         } finally {
           textQueued.delete(page.id);
         }
@@ -335,7 +384,8 @@ export async function exportBackup() {
   ensureDirs();
   const { docs, text } = useStore.getState();
   const stamp = new Date().toISOString().slice(0, 10);
-  const out = new File(scratchDir(), `eDoc-backup-${stamp}.zip`);
+  const scratch = scratchDir();
+  const out = new File(scratch, `eDoc-backup-${stamp}.zip`);
   out.create({ intermediates: true, overwrite: true });
   const handle = out.open(FileMode.WriteOnly);
   try {
@@ -353,10 +403,17 @@ export async function exportBackup() {
       }
     }
     zip.finish();
-  } finally {
+  } catch (error) {
     handle.close();
+    discard(scratch);
+    throw error;
   }
-  await Sharing.shareAsync(out.uri, { mimeType: 'application/zip', UTI: 'public.zip-archive' });
+  handle.close();
+  try {
+    await Sharing.shareAsync(out.uri, { mimeType: 'application/zip', UTI: 'public.zip-archive' });
+  } finally {
+    discard(scratch);
+  }
 }
 
 // Replaces the whole library with the content of a backup archive.
@@ -410,9 +467,14 @@ export async function restoreBackup(): Promise<boolean> {
       file.create({ overwrite: true });
       file.write(readZipEntry(source, entry));
     }
-  } finally {
+  } catch (error) {
     handle.close();
+    discard(archive);
+    discard(staging);
+    throw error;
   }
+  handle.close();
+  discard(archive);
 
   await Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
   if (filesDir.exists) {
@@ -425,8 +487,11 @@ export async function restoreBackup(): Promise<boolean> {
     const reminderIds = doc.expiresAt ? await scheduleReminders({ ...doc, reminderIds: [] }, doc.expiresAt) : [];
     docs.push({ ...doc, reminderIds });
   }
-  useStore.getState().replaceAll({ ...library, docs }, text);
+  // Privacy settings of this iPhone win over the ones stored in the backup.
+  const settings = useStore.getState().settings;
+  useStore.getState().replaceAll({ ...library, docs, settings }, text);
   flushStore();
+  await secureStorage();
   queueText();
   return true;
 }
