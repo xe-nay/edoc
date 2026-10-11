@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, radius, space, withAlpha } from '../theme';
+import { colors, radius, space } from '../theme';
 import { Icon, type IconName } from './Icon';
 
 export type DialogButton = {
@@ -90,7 +90,7 @@ export function DialogHost() {
     return (
       <Modal transparent statusBarTranslucent navigationBarTranslucent animationType="fade" onRequestClose={cancel}>
         <Pressable style={styles.backdrop} onPress={cancel}>
-          <Pressable style={[styles.sheet, { marginBottom: insets.bottom + 12 }]} onPress={() => {}}>
+          <Pressable style={styles.sheet} onPress={() => {}}>
             {request.title ? (
               <Text numberOfLines={1} style={styles.sheetTitle}>
                 {request.title}
@@ -102,9 +102,13 @@ export function DialogHost() {
                 <Pressable
                   key={index}
                   disabled={choice.disabled}
-                  android_ripple={{ color: withAlpha(colors.accentSoft, 0.14) }}
                   onPress={() => finish(choice.onPress)}
-                  style={[styles.choice, index > 0 && styles.divider, choice.disabled && { opacity: 0.35 }]}>
+                  style={({ pressed }) => [
+                    styles.choice,
+                    index > 0 && styles.divider,
+                    choice.disabled && { opacity: 0.35 },
+                    pressed && { backgroundColor: colors.glassStrong },
+                  ]}>
                   {choice.icon ? <Icon name={choice.icon} size={19} color={tint} /> : null}
                   <Text style={[styles.choiceText, { color: tint }]}>{choice.label}</Text>
                   {choice.checked ? <Icon name="checkmark" size={16} color={colors.accentSoft} weight="semibold" /> : null}

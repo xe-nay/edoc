@@ -1,6 +1,14 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type GestureResponderEvent,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 
 import { pageUri } from '../storage';
 import { colors, radius, withAlpha } from '../theme';
@@ -41,17 +49,36 @@ type TileProps = {
   color: string;
   icon?: IconName;
   onPress: () => void;
-  onLongPress?: () => void;
+  onLongPress?: (event: GestureResponderEvent) => void;
+  onPressOut?: () => void;
+  // The slot left behind while the folder is being dragged.
+  dimmed?: boolean;
+  // The copy that follows the finger while dragging.
+  lifted?: boolean;
 };
 
-export function FolderTile({ name, count, color, icon = 'folder.fill', onPress, onLongPress }: TileProps) {
+export const TILE_HEIGHT = 116;
+
+export function FolderTile({
+  name,
+  count,
+  color,
+  icon = 'folder.fill',
+  onPress,
+  onLongPress,
+  onPressOut,
+  dimmed,
+  lifted,
+}: TileProps) {
   // The outer view takes the grid column; padding on a flex child would skew column widths.
   return (
-    <View style={styles.tileCell}>
+    <View style={[styles.tileCell, dimmed && { opacity: 0.25 }]}>
       <Pressable
         onPress={onPress}
         onLongPress={onLongPress}
-        style={({ pressed }) => [styles.tile, pressed && styles.pressed]}>
+        onPressOut={onPressOut}
+        delayLongPress={300}
+        style={({ pressed }) => [styles.tile, pressed && !lifted && styles.pressed, lifted && styles.tileLifted]}>
         <LinearGradient
           colors={[withAlpha(color, 0.26), withAlpha(color, 0.04), 'transparent']}
           locations={[0, 0.55, 1]}
@@ -154,8 +181,18 @@ const styles = StyleSheet.create({
   tileCell: {
     flex: 1,
   },
+  tileLifted: {
+    backgroundColor: '#101B36',
+    borderColor: colors.hairlineStrong,
+    transform: [{ scale: 1.04 }],
+    shadowColor: colors.accent,
+    shadowOpacity: 0.5,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  },
   tile: {
-    height: 116,
+    height: TILE_HEIGHT,
     padding: 14,
     justifyContent: 'space-between',
     borderRadius: radius.lg,

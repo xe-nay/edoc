@@ -29,7 +29,9 @@ export default function DocScreen() {
   const router = useRouter();
   const doc = useStore((state) => state.docs.find((item) => item.id === id));
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
+  const { width, height: windowHeight } = useWindowDimensions();
+  // Height actually available to this screen, measured once it is laid out.
+  const [area, setArea] = useState(0);
   const [index, setIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [zoomed, setZoomed] = useState(false);
@@ -76,9 +78,11 @@ export default function DocScreen() {
     );
   }
 
-  // Space kept clear for the navigation bar above and the toolbar below.
-  const top = insets.top + 52;
-  const bottom = insets.bottom + 64;
+  // Space kept clear for the navigation bar above and the toolbar below. On iOS the bar floats
+  // over the page; elsewhere it sits above the screen's own area.
+  const height = area > 0 ? area : windowHeight;
+  const top = Platform.OS === 'ios' ? insets.top + 52 : 12;
+  const bottom = insets.bottom + (Platform.OS === 'ios' ? 64 : 84);
   const frameWidth = width - 28;
   const frameHeight = height - top - bottom;
 
@@ -113,7 +117,7 @@ export default function DocScreen() {
     router.push({ pathname: `/doc/[id]/${screen}`, params: { id: doc.id, page: String(index) } });
 
   return (
-    <View style={styles.fill}>
+    <View style={styles.fill} onLayout={(event) => setArea(event.nativeEvent.layout.height)}>
       <FlatList
         data={doc.pages}
         keyExtractor={(page) => page.id + page.file}

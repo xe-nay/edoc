@@ -5,8 +5,9 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { importFromFiles, importFromPhotos, scanDocument, type Target } from '../src/actions';
 import { nameThenOpen } from '../src/add-flow';
 import { BottomBar, HeaderBar, bottomBarInset } from '../src/components/Bars';
-import { DocCard, DocRow, FolderTile } from '../src/components/cards';
-import { Icon, type IconName } from '../src/components/Icon';
+import { DocCard, DocRow } from '../src/components/cards';
+import { FolderGrid, type GridTile } from '../src/components/FolderGrid';
+import { Icon } from '../src/components/Icon';
 import { Card, Chip, EmptyState, Glow, SectionLabel, tagIcons, tagLabels } from '../src/components/ui';
 import { openDocMenu } from '../src/doc-menu';
 import { chooseOption, confirmDelete, deviceName, promptText, showError, success, tap } from '../src/native-ui';
@@ -21,17 +22,6 @@ const tagColors: Record<Tag, string> = { personal: colors.cyan, professional: '#
 
 // What the strip at the top has selected: everything, one tag, or one folder.
 type Selection = { kind: 'all' } | { kind: 'tag'; tag: Tag } | { kind: 'folder'; id: string };
-
-type Tile = {
-  key: string;
-  name: string;
-  count: number;
-  color: string;
-  icon?: IconName;
-  // Route id of the folder screen this tile opens.
-  open: string;
-  folder?: Folder;
-};
 
 function snippet(doc: Doc, text: Record<string, string>, query: string) {
   const needle = query.trim().toLowerCase();
@@ -61,6 +51,7 @@ export default function Home() {
   const text = useStore((state) => state.text);
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<Selection>({ kind: 'all' });
+  const [dragging, setDragging] = useState(false);
 
   // A folder that was deleted while selected falls back to everything.
   const selection: Selection =
@@ -163,23 +154,30 @@ export default function Home() {
   const toggle = (other: Selection) => setPicked(isPicked(other) ? { kind: 'all' } : other);
 
   // Personal and Professional sit in the grid as folders of their own, next to the ones created by hand.
-  const tiles: Tile[] = [
-    { key: 'all', name: 'All', count: docs.length, color: colors.accentSoft, icon: 'tray.full.fill', open: 'all' },
+  const tiles: GridTile[] = [
+    {
+      key: 'all',
+      name: 'All',
+      count: docs.length,
+      color: colors.accentSoft,
+      icon: 'tray.full.fill',
+      onPress: () => openFolder('all'),
+    },
     ...tags.map((tag) => ({
       key: tag,
       name: tagLabels[tag],
       count: docs.filter((doc) => doc.tag === tag).length,
       color: tagColors[tag],
       icon: tagIcons[tag],
-      open: `tag-${tag}`,
+      onPress: () => openFolder(`tag-${tag}`),
     })),
     ...folders.map((folder) => ({
       key: folder.id,
       name: folder.name,
       count: docs.filter((doc) => doc.folderId === folder.id).length,
       color: folder.color,
-      open: folder.id,
       folder,
+      onPress: () => openFolder(folder.id),
     })),
   ];
 
@@ -188,6 +186,7 @@ export default function Home() {
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         keyboardDismissMode="on-drag"
+        scrollEnabled={!dragging}
         contentContainerStyle={styles.content}
         style={styles.scroll}>
         {results ? (
@@ -267,24 +266,7 @@ export default function Home() {
 
                 <View style={styles.section}>
                   <SectionLabel>Folders</SectionLabel>
-                  <View style={styles.grid}>
-                    {pairs(tiles).map((row, index) => (
-                      <View key={index} style={styles.gridRow}>
-                        {row.map((tile) => (
-                          <FolderTile
-                            key={tile.key}
-                            name={tile.name}
-                            icon={tile.icon}
-                            color={tile.color}
-                            count={tile.count}
-                            onPress={() => openFolder(tile.open)}
-                            onLongPress={tile.folder ? () => folderMenu(tile.folder as Folder) : undefined}
-                          />
-                        ))}
-                        {row.length === 1 ? <View style={{ flex: 1 }} /> : null}
-                      </View>
-                    ))}
-                  </View>
+                  <FolderGrid tiles={tiles} onMenu={folderMenu} onDragChange={setDragging} />
                 </View>
 
                 {recent.length > 0 ? (
@@ -405,13 +387,6 @@ const styles = StyleSheet.create({
   },
   section: {
     marginTop: space.xl,
-  },
-  grid: {
-    gap: 12,
-  },
-  gridRow: {
-    flexDirection: 'row',
-    gap: 12,
   },
   docs: {
     marginTop: space.lg,

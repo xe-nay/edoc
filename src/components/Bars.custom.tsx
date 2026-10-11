@@ -4,7 +4,7 @@ import { Stack } from 'expo-router';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, withAlpha } from '../theme';
+import { colors } from '../theme';
 import type { BarAction, BarItem } from './bar-types';
 import { showDialog } from './Dialogs';
 import { Icon } from './Icon';
@@ -31,12 +31,12 @@ function Button({ item, compact }: { item: BarAction; compact?: boolean }) {
       accessibilityLabel={item.label}
       disabled={item.disabled}
       hitSlop={compact ? 6 : 0}
-      android_ripple={{ color: withAlpha(colors.accentSoft, 0.2), borderless: true }}
       onPress={() => (item.menu ? openMenu(item) : item.onPress?.())}
-      style={[
+      style={({ pressed }) => [
         compact ? styles.headerButton : styles.button,
         item.prominent && styles.prominent,
         item.disabled && { opacity: 0.35 },
+        pressed && { opacity: 0.6 },
       ]}>
       {item.icon ? <Icon name={item.icon} size={21} color={tint} /> : <Text style={styles.label}>{item.label}</Text>}
     </Pressable>
