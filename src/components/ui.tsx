@@ -27,17 +27,22 @@ export function Card({ children, style }: { children: ReactNode; style?: StylePr
 export function Chip({
   label,
   icon,
+  iconColor,
   active,
   onPress,
+  onLongPress,
 }: {
   label: string;
   icon?: IconName;
+  // Fixed icon tint (a folder's colour); defaults to the text colour.
+  iconColor?: string;
   active: boolean;
   onPress: () => void;
+  onLongPress?: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
-      {icon ? <Icon name={icon} size={14} color={active ? colors.text : colors.textDim} /> : null}
+    <Pressable onPress={onPress} onLongPress={onLongPress} style={[styles.chip, active && styles.chipActive]}>
+      {icon ? <Icon name={icon} size={14} color={iconColor ?? (active ? colors.text : colors.textDim)} /> : null}
       <Text style={[styles.chipText, active && { color: colors.text }]}>{label}</Text>
     </Pressable>
   );

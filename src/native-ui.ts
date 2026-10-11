@@ -31,6 +31,20 @@ export function promptText(title: string, initial: string, onSubmit: (value: str
   );
 }
 
+// Naming step shown right after a document is added: type a name, or save as-is to keep the suggestion.
+export function promptName(suggestion: string, onDone: (name: string) => void) {
+  if (!isIOS) {
+    onDone(suggestion);
+    return;
+  }
+  Alert.prompt(
+    'Name',
+    `Leave empty to keep “${suggestion}”.`,
+    [{ text: 'Save', onPress: (value?: string) => onDone(value?.trim() || suggestion) }],
+    'plain-text',
+  );
+}
+
 // Native prompt with a hidden text field, for backup passwords.
 export function promptSecret(
   title: string,

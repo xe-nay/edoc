@@ -3,8 +3,10 @@ import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { importFromFiles, importFromPhotos, scanDocument, type Target } from '../src/actions';
+import { nameThenOpen } from '../src/add-flow';
 import { BottomBar, HeaderBar } from '../src/components/Bars';
-import { DocRow, FolderTile } from '../src/components/cards';
+import { DocCard, DocRow, FolderTile } from '../src/components/cards';
+import type { IconName } from '../src/components/Icon';
 import { Card, Chip, EmptyState, Glow, SectionLabel, tagIcons, tagLabels } from '../src/components/ui';
 import { openDocMenu } from '../src/doc-menu';
 import { chooseOption, confirmDelete, promptText, showError, success, tap } from '../src/native-ui';
@@ -13,6 +15,22 @@ import { colors, folderColors, space } from '../src/theme';
 import type { Doc, Folder, Tag } from '../src/types';
 
 const tags: Tag[] = ['personal', 'professional'];
+
+const tagColors: Record<Tag, string> = { personal: colors.cyan, professional: '#A66BFF' };
+
+// What the strip at the top has selected: everything, one tag, or one folder.
+type Selection = { kind: 'all' } | { kind: 'tag'; tag: Tag } | { kind: 'folder'; id: string };
+
+type Tile = {
+  key: string;
+  name: string;
+  count: number;
+  color: string;
+  icon?: IconName;
+  // Route id of the folder screen this tile opens.
+  open: string;
+  folder?: Folder;
+};
 
 function snippet(doc: Doc, text: Record<string, string>, query: string) {
   const needle = query.trim().toLowerCase();
@@ -27,66 +45,76 @@ function snippet(doc: Doc, text: Record<string, string>, query: string) {
   return undefined;
 }
 
+function pairs<T>(items: T[]) {
+  const rows: T[][] = [];
+  for (let index = 0; index < items.length; index += 2) {
+    rows.push(items.slice(index, index + 2));
+  }
+  return rows;
+}
+
 export default function Home() {
   const router = useRouter();
   const folders = useStore((state) => state.folders);
   const docs = useStore((state) => state.docs);
   const text = useStore((state) => state.text);
   const [query, setQuery] = useState('');
-  const [tag, setTag] = useState<Tag | null>(null);
+  const [picked, setPicked] = useState<Selection>({ kind: 'all' });
 
-  const scoped = useMemo(() => (tag ? docs.filter((doc) => doc.tag === tag) : docs), [docs, tag]);
-  const results = useMemo(
-    () => (query.trim() ? searchDocs(scoped, text, query) : null),
-    [scoped, text, query],
-  );
+  // A folder that was deleted while selected falls back to everything.
+  const selection: Selection =
+    picked.kind === 'folder' && !folders.some((folder) => folder.id === picked.id) ? { kind: 'all' } : picked;
+
+  const selectedTag = selection.kind === 'tag' ? selection.tag : null;
+  const selectedFolder = selection.kind === 'folder' ? selection.id : null;
+
+  const selected = useMemo(() => {
+    const matching = selectedTag
+      ? docs.filter((doc) => doc.tag === selectedTag)
+      : selectedFolder
+        ? docs.filter((doc) => doc.folderId === selectedFolder)
+        : docs;
+    return [...matching].sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [docs, selectedTag, selectedFolder]);
+
+  const results = useMemo(() => (query.trim() ? searchDocs(docs, text, query) : null), [docs, text, query]);
   const expiring = useMemo(
     () =>
-      scoped
+      docs
         .filter((doc) => doc.expiresAt !== null && daysUntil(doc.expiresAt) <= 60)
         .sort((a, b) => (a.expiresAt ?? 0) - (b.expiresAt ?? 0)),
-    [scoped],
+    [docs],
   );
-  const recent = useMemo(() => [...scoped].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6), [scoped]);
+  const recent = selected.slice(0, 6);
 
-  const target: Target = { folderId: null, tag };
+  // New documents land in whatever is selected at the top.
+  const target: Target = { folderId: selectedFolder, tag: selectedTag };
   const openDoc = (id: string) => router.push({ pathname: '/doc/[id]', params: { id } });
   const openFolder = (id: string) => router.push({ pathname: '/folder/[id]', params: { id } });
 
-  const scan = async () => {
-    tap();
+  const add = async (task: () => Promise<string | null>) => {
     try {
-      const id = await scanDocument(target);
+      const id = await task();
       if (id) {
         success();
-        openDoc(id);
+        nameThenOpen(id, openDoc);
       }
     } catch (error) {
       showError(error);
     }
   };
 
-  const importFiles = async () => {
-    try {
+  const scan = () => {
+    tap();
+    add(() => scanDocument(target));
+  };
+
+  // Several files imported at once keep their own file names and are not opened.
+  const importFiles = () =>
+    add(async () => {
       const created = await importFromFiles(target);
-      if (created.length === 1) {
-        openDoc(created[0]);
-      }
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const importPhotos = async () => {
-    try {
-      const id = await importFromPhotos(target);
-      if (id) {
-        openDoc(id);
-      }
-    } catch (error) {
-      showError(error);
-    }
-  };
+      return created.length === 1 ? created[0] : null;
+    });
 
   const newFolder = () => {
     promptText('New Folder', '', (name) => {
@@ -124,11 +152,32 @@ export default function Home() {
     );
   };
 
-  const tiles: (Folder | 'all')[] = ['all', ...folders];
-  const rows: (Folder | 'all')[][] = [];
-  for (let index = 0; index < tiles.length; index += 2) {
-    rows.push(tiles.slice(index, index + 2));
-  }
+  const isPicked = (other: Selection) =>
+    selection.kind === other.kind &&
+    (selection.kind !== 'tag' || (other.kind === 'tag' && selection.tag === other.tag)) &&
+    (selection.kind !== 'folder' || (other.kind === 'folder' && selection.id === other.id));
+  const toggle = (other: Selection) => setPicked(isPicked(other) ? { kind: 'all' } : other);
+
+  // Personal and Professional sit in the grid as folders of their own, next to the ones created by hand.
+  const tiles: Tile[] = [
+    { key: 'all', name: 'All', count: docs.length, color: colors.accentSoft, icon: 'tray.full.fill', open: 'all' },
+    ...tags.map((tag) => ({
+      key: tag,
+      name: tagLabels[tag],
+      count: docs.filter((doc) => doc.tag === tag).length,
+      color: tagColors[tag],
+      icon: tagIcons[tag],
+      open: `tag-${tag}`,
+    })),
+    ...folders.map((folder) => ({
+      key: folder.id,
+      name: folder.name,
+      count: docs.filter((doc) => doc.folderId === folder.id).length,
+      color: folder.color,
+      open: folder.id,
+      folder,
+    })),
+  ];
 
   return (
     <>
@@ -155,75 +204,112 @@ export default function Home() {
           )
         ) : (
           <>
-            <View style={styles.chips}>
-              <Chip label="All" active={tag === null} onPress={() => setTag(null)} />
-              {tags.map((value) => (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.strip}
+              contentContainerStyle={styles.stripContent}>
+              <Chip label="All" active={selection.kind === 'all'} onPress={() => setPicked({ kind: 'all' })} />
+              {tags.map((tag) => (
                 <Chip
-                  key={value}
-                  label={tagLabels[value]}
-                  icon={tagIcons[value]}
-                  active={tag === value}
-                  onPress={() => setTag(tag === value ? null : value)}
+                  key={tag}
+                  label={tagLabels[tag]}
+                  icon={tagIcons[tag]}
+                  active={isPicked({ kind: 'tag', tag })}
+                  onPress={() => toggle({ kind: 'tag', tag })}
                 />
               ))}
-            </View>
+              {folders.map((folder) => (
+                <Chip
+                  key={folder.id}
+                  label={folder.name}
+                  icon="folder.fill"
+                  iconColor={folder.color}
+                  active={isPicked({ kind: 'folder', id: folder.id })}
+                  onPress={() => toggle({ kind: 'folder', id: folder.id })}
+                  onLongPress={() => folderMenu(folder)}
+                />
+              ))}
+            </ScrollView>
 
-            {expiring.length > 0 ? (
-              <View style={styles.section}>
-                <SectionLabel>Expiring</SectionLabel>
-                <Card>
-                  {expiring.slice(0, 3).map((doc) => (
-                    <DocRow key={doc.id} doc={doc} onPress={() => openDoc(doc.id)} onLongPress={() => openDocMenu(doc)} />
-                  ))}
-                </Card>
-              </View>
-            ) : null}
+            {selection.kind === 'all' ? (
+              <>
+                {expiring.length > 0 ? (
+                  <View style={styles.section}>
+                    <SectionLabel>Expiring</SectionLabel>
+                    <Card>
+                      {expiring.slice(0, 3).map((doc) => (
+                        <DocRow
+                          key={doc.id}
+                          doc={doc}
+                          onPress={() => openDoc(doc.id)}
+                          onLongPress={() => openDocMenu(doc)}
+                        />
+                      ))}
+                    </Card>
+                  </View>
+                ) : null}
 
-            <View style={styles.section}>
-              <SectionLabel>Folders</SectionLabel>
-              <View style={styles.grid}>
-                {rows.map((row, index) => (
-                  <View key={index} style={styles.gridRow}>
-                    {row.map((item) =>
-                      item === 'all' ? (
-                        <FolderTile
-                          key="all"
-                          name="All"
-                          icon="tray.full.fill"
-                          color={colors.accentSoft}
-                          count={scoped.length}
-                          onPress={() => openFolder('all')}
+                <View style={styles.section}>
+                  <SectionLabel>Folders</SectionLabel>
+                  <View style={styles.grid}>
+                    {pairs(tiles).map((row, index) => (
+                      <View key={index} style={styles.gridRow}>
+                        {row.map((tile) => (
+                          <FolderTile
+                            key={tile.key}
+                            name={tile.name}
+                            icon={tile.icon}
+                            color={tile.color}
+                            count={tile.count}
+                            onPress={() => openFolder(tile.open)}
+                            onLongPress={tile.folder ? () => folderMenu(tile.folder as Folder) : undefined}
+                          />
+                        ))}
+                        {row.length === 1 ? <View style={{ flex: 1 }} /> : null}
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                {recent.length > 0 ? (
+                  <View style={styles.section}>
+                    <SectionLabel>Recent</SectionLabel>
+                    <Card>
+                      {recent.map((doc) => (
+                        <DocRow
+                          key={doc.id}
+                          doc={doc}
+                          onPress={() => openDoc(doc.id)}
+                          onLongPress={() => openDocMenu(doc)}
                         />
-                      ) : (
-                        <FolderTile
-                          key={item.id}
-                          name={item.name}
-                          color={item.color}
-                          count={scoped.filter((doc) => doc.folderId === item.id).length}
-                          onPress={() => openFolder(item.id)}
-                          onLongPress={() => folderMenu(item)}
-                        />
-                      ),
-                    )}
+                      ))}
+                    </Card>
+                  </View>
+                ) : (
+                  <EmptyState icon="doc.viewfinder" label="Scan your first document" />
+                )}
+                {docs.length === 0 ? <Text style={styles.hint}>Everything stays on this iPhone.</Text> : null}
+              </>
+            ) : selected.length > 0 ? (
+              <View style={[styles.section, styles.docs]}>
+                {pairs(selected).map((row, index) => (
+                  <View key={index} style={styles.docsRow}>
+                    {row.map((doc) => (
+                      <DocCard
+                        key={doc.id}
+                        doc={doc}
+                        onPress={() => openDoc(doc.id)}
+                        onLongPress={() => openDocMenu(doc)}
+                      />
+                    ))}
                     {row.length === 1 ? <View style={{ flex: 1 }} /> : null}
                   </View>
                 ))}
               </View>
-            </View>
-
-            {recent.length > 0 ? (
-              <View style={styles.section}>
-                <SectionLabel>Recent</SectionLabel>
-                <Card>
-                  {recent.map((doc) => (
-                    <DocRow key={doc.id} doc={doc} onPress={() => openDoc(doc.id)} onLongPress={() => openDocMenu(doc)} />
-                  ))}
-                </Card>
-              </View>
             ) : (
-              <EmptyState icon="doc.viewfinder" label="Scan your first document" />
+              <EmptyState icon="doc.viewfinder" label="No documents" />
             )}
-            {docs.length === 0 ? <Text style={styles.hint}>Everything stays on this iPhone.</Text> : null}
           </>
         )}
       </ScrollView>
@@ -243,7 +329,11 @@ export default function Home() {
             menu: [
               { icon: 'folder.badge.plus', label: 'New Folder', onPress: newFolder },
               { icon: 'arrow.down.doc', label: 'Import from Files', onPress: importFiles },
-              { icon: 'photo.on.rectangle', label: 'Import from Photos', onPress: importPhotos },
+              {
+                icon: 'photo.on.rectangle',
+                label: 'Import from Photos',
+                onPress: () => add(() => importFromPhotos(target)),
+              },
             ],
           },
           'space',
@@ -266,8 +356,13 @@ const styles = StyleSheet.create({
     paddingTop: space.sm,
     paddingBottom: 40,
   },
-  chips: {
-    flexDirection: 'row',
+  // The strip runs edge to edge so chips slide under the screen edges.
+  strip: {
+    marginHorizontal: -space.md,
+    flexGrow: 0,
+  },
+  stripContent: {
+    paddingHorizontal: space.md,
     gap: 8,
   },
   section: {
@@ -279,6 +374,14 @@ const styles = StyleSheet.create({
   gridRow: {
     flexDirection: 'row',
     gap: 12,
+  },
+  docs: {
+    marginTop: space.lg,
+    gap: 22,
+  },
+  docsRow: {
+    flexDirection: 'row',
+    gap: 14,
   },
   hint: {
     color: colors.textFaint,
