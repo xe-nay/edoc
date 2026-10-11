@@ -1,7 +1,7 @@
 name: iOS build
 
 # Builds an unsigned eDoc.ipa on a cloud Mac. The file is signed and installed
-# on the iPhone from Windows with Sideloadly. Only GitHub's own actions are used.
+# on the iPhone with a free Apple ID. Only GitHub's own actions are used.
 on:
   workflow_dispatch:
   push:
@@ -10,7 +10,7 @@ on:
       - '**.md'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -37,6 +37,13 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: npm ci
+
+      # Every build gets its own version so the phone can tell that an update is available.
+      - name: Set the version
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('app.json','utf8'));c.expo.version=process.argv[1];c.expo.ios.buildNumber=process.argv[2];fs.writeFileSync('app.json',JSON.stringify(c,null,2));" "$VERSION" "${{ github.run_number }}"
 
       - name: Generate the native project
         run: npx expo prebuild --platform ios --no-install
@@ -85,6 +92,15 @@ jobs:
           name: eDoc-ipa
           path: eDoc.ipa
           retention-days: 14
+
+      # Stable links the iPhone downloads from: the installer and the app source read by SideStore.
+      - name: Publish the latest build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/make-source.mjs "${{ github.repository }}" "$VERSION" "$(stat -f%z eDoc.ipa)" > source.json
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest eDoc.ipa source.json --title "eDoc $VERSION" --notes "Build $VERSION" --latest
 
       - name: Keep the build log on failure
         if: failure()
