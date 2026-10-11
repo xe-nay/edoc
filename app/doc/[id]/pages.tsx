@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { deletePage, movePage, rotatePage, scanMorePages, setPageFilter } from '../../../src/actions';
-import { BottomBar } from '../../../src/components/Bars';
+import { BottomBar, bottomBarInset } from '../../../src/components/Bars';
 import type { BarAction } from '../../../src/components/bar-types';
 import { PageImage } from '../../../src/components/PageImage';
 import { confirmDelete, showError, tap } from '../../../src/native-ui';
@@ -149,7 +149,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: space.md,
     paddingTop: space.md,
-    paddingBottom: 40,
+    paddingBottom: 40 + bottomBarInset,
   },
   columns: {
     gap: 12,

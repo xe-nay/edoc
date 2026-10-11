@@ -1,20 +1,20 @@
 import * as LocalAuthentication from 'expo-local-authentication';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import {
   discardBackup,
-  exportBackup,
-  hasProtectedDocs,
-  MIN_PASSWORD_LENGTH,
   pickBackup,
   restoreBackup,
   secureStorage,
   type PickedBackup,
+  type RestoreMode,
 } from '../src/actions';
+import { lockName } from '../src/auth';
 import { Icon, type IconName } from '../src/components/Icon';
 import { Glow, SectionLabel } from '../src/components/ui';
-import { promptSecret, showError, success } from '../src/native-ui';
+import { chooseOption, deviceName, promptSecret, showError, success } from '../src/native-ui';
 import { storageBytes } from '../src/storage';
 import { useStore } from '../src/store';
 import { colors, radius, space } from '../src/theme';
@@ -23,6 +23,8 @@ import { colors, radius, space } from '../src/theme';
 function later(action: () => void) {
   setTimeout(action, 400);
 }
+
+const isIOS = Platform.OS === 'ios';
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) {
@@ -65,20 +67,21 @@ export default function SettingsScreen() {
   const deviceBackup = useStore((state) => state.settings.deviceBackup);
   const protectNew = useStore((state) => state.settings.protectNew);
   const count = useStore((state) => state.docs.length);
-  const [busy, setBusy] = useState<'export' | 'restore' | null>(null);
+  const router = useRouter();
+  const [busy, setBusy] = useState<'restore' | null>(null);
 
   const toggleFaceId = async (next: boolean) => {
-    if (Platform.OS !== 'ios') {
+    if (Platform.OS === 'web') {
       useStore.getState().updateSettings({ faceId: next });
       return;
     }
     try {
       if (next && !(await LocalAuthentication.isEnrolledAsync())) {
-        Alert.alert('Face ID is not set up', 'Turn on Face ID or a passcode in the Settings app first.');
+        Alert.alert(`${lockName} is not set up`, 'Set up a screen lock in the Settings app first.');
         return;
       }
       const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: next ? 'Turn on Face ID for eDoc' : 'Turn off Face ID for eDoc',
+        promptMessage: next ? `Turn on ${lockName} for eDoc` : `Turn off ${lockName} for eDoc`,
       });
       if (result.success) {
         useStore.getState().updateSettings({ faceId: next });
@@ -89,50 +92,10 @@ export default function SettingsScreen() {
     }
   };
 
-  const doExport = async (password: string | null) => {
-    setBusy('export');
-    try {
-      await exportBackup(password);
-    } catch (error) {
-      showError(error);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  // The password is asked twice: a typo would make the backup impossible to open.
-  const runExport = () => {
-    const required = hasProtectedDocs();
-    const rule = `At least ${MIN_PASSWORD_LENGTH} characters.`;
-    promptSecret(
-      'Backup Password',
-      required ? `${rule} It cannot be recovered.` : `${rule} Leave empty for a backup without encryption.`,
-      (first) => {
-        if (!first && !required) {
-          doExport(null);
-          return;
-        }
-        if (first.length < MIN_PASSWORD_LENGTH) {
-          Alert.alert('Password too short', rule);
-          return;
-        }
-        later(() =>
-          promptSecret('Repeat Password', undefined, (second) => {
-            if (second === first) {
-              doExport(first);
-            } else {
-              Alert.alert('Passwords do not match');
-            }
-          }),
-        );
-      },
-    );
-  };
-
-  const doRestore = async (picked: PickedBackup, password: string | null) => {
+  const doRestore = async (picked: PickedBackup, password: string | null, mode: RestoreMode) => {
     setBusy('restore');
     try {
-      await restoreBackup(picked, password);
+      await restoreBackup(picked, password, mode);
       success();
     } catch (error) {
       discardBackup(picked);
@@ -142,51 +105,68 @@ export default function SettingsScreen() {
     }
   };
 
-  const chooseBackup = async () => {
+  const askPassword = (picked: PickedBackup, mode: RestoreMode) => {
+    if (!picked.sealed) {
+      doRestore(picked, null, mode);
+      return;
+    }
+    later(() =>
+      promptSecret(
+        'Backup Password',
+        undefined,
+        (password) => doRestore(picked, password, mode),
+        () => discardBackup(picked),
+      ),
+    );
+  };
+
+  // A backup made on an iPhone or an Android phone can either be added to what is
+  // here, or take the place of everything.
+  const runRestore = async () => {
     try {
       const picked = await pickBackup();
       if (!picked) {
         return;
       }
-      if (picked.sealed) {
-        later(() =>
-          promptSecret(
-            'Backup Password',
-            undefined,
-            (password) => doRestore(picked, password),
-            () => discardBackup(picked),
-          ),
-        );
-      } else {
-        doRestore(picked, null);
-      }
+      later(() =>
+        chooseOption(
+          [
+            { label: 'Add to My Documents', onPress: () => askPassword(picked, 'merge') },
+            {
+              label: 'Replace Everything',
+              destructive: true,
+              onPress: () =>
+                later(() =>
+                  Alert.alert('Replace everything?', 'All documents currently in eDoc are removed first.', [
+                    { text: 'Cancel', style: 'cancel', onPress: () => discardBackup(picked) },
+                    { text: 'Replace', style: 'destructive', onPress: () => askPassword(picked, 'replace') },
+                  ]),
+                ),
+            },
+          ],
+          'Restore Backup',
+        ),
+      );
     } catch (error) {
       showError(error);
     }
   };
-
-  const runRestore = () => {
-    Alert.alert('Restore a backup?', 'Everything currently in eDoc is replaced by the content of the backup.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Restore', style: 'destructive', onPress: () => later(chooseBackup) },
-    ]);
-  };
-
   return (
     <>
       <ScrollView contentInsetAdjustmentBehavior="automatic" style={styles.fill} contentContainerStyle={styles.content}>
         <SectionLabel>Privacy</SectionLabel>
         <View style={styles.group}>
-          <Row icon="faceid" label="Face ID">
+          <Row icon="faceid" label={lockName}>
             <Switch value={faceId} onValueChange={toggleFaceId} trackColor={{ true: colors.accent }} />
           </Row>
-          <Row icon="lock.fill" label="Protect New Documents">
+          <Row icon="lock.fill" label="Protect New Documents" last={!isIOS}>
             <Switch
               value={protectNew}
               onValueChange={(next) => useStore.getState().updateSettings({ protectNew: next })}
               trackColor={{ true: colors.accent }}
             />
           </Row>
+          {isIOS ? (
           <Row icon="icloud" label="Include in iPhone Backups" last>
             <Switch
               value={deviceBackup}
@@ -197,9 +177,12 @@ export default function SettingsScreen() {
               trackColor={{ true: colors.accent }}
             />
           </Row>
+          ) : null}
         </View>
         <Text style={styles.footnote}>
-          {deviceBackup
+          {!isIOS
+            ? 'Documents stay on this phone. They are not part of any cloud or computer backup.'
+            : deviceBackup
             ? 'Documents are part of the iCloud and computer backups of this iPhone.'
             : 'Documents never leave this iPhone, not even in its iCloud or computer backups.'}
         </Text>
@@ -207,16 +190,14 @@ export default function SettingsScreen() {
         <View style={styles.gap} />
         <SectionLabel>Backup</SectionLabel>
         <View style={styles.group}>
-          <Row icon="square.and.arrow.up" label="Export Backup" onPress={busy ? undefined : runExport}>
-            {busy === 'export' ? <ActivityIndicator color={colors.textDim} /> : undefined}
-          </Row>
+          <Row icon="square.and.arrow.up" label="Export Backup" onPress={busy ? undefined : () => router.push('/export')} />
           <Row icon="arrow.counterclockwise" label="Restore Backup" onPress={busy ? undefined : runRestore} last>
             {busy === 'restore' ? <ActivityIndicator color={colors.textDim} /> : undefined}
           </Row>
         </View>
         <Text style={styles.footnote}>
-          A backup is one file with every document, encrypted with the password you choose. It is the only way to
-          recover protected documents if this iPhone or the app is lost.
+          A backup is one file with the documents you choose, encrypted with your password. It opens on iPhone and
+          Android alike, and is the only way to recover protected documents if this {deviceName} or the app is lost.
         </Text>
 
         <View style={styles.gap} />

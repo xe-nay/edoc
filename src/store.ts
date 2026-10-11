@@ -15,10 +15,14 @@ type State = {
 
   hydrate: () => void;
   replaceAll: (library: Library, text: TextIndex) => void;
+  // Adds the content of a backup to what is already here; entries with the same id are replaced.
+  mergeIn: (folders: Folder[], docs: Doc[], text: TextIndex) => void;
 
   addFolder: (name: string, color: string) => Folder;
   updateFolder: (id: string, patch: Partial<Pick<Folder, 'name' | 'color'>>) => void;
   removeFolder: (id: string) => void;
+  // Moves a folder to a new position in the list.
+  moveFolder: (id: string, toIndex: number) => void;
 
   addDoc: (doc: Doc) => void;
   updateDoc: (id: string, patch: Partial<Omit<Doc, 'id'>>) => void;
@@ -68,6 +72,16 @@ export const useStore = create<State>((set, get) => ({
     });
   },
 
+  mergeIn: (folders, docs, text) => {
+    const folderIds = new Set(folders.map((folder) => folder.id));
+    const docIds = new Set(docs.map((doc) => doc.id));
+    set({
+      folders: [...get().folders.filter((folder) => !folderIds.has(folder.id)), ...folders],
+      docs: [...docs, ...get().docs.filter((doc) => !docIds.has(doc.id))],
+      text: { ...get().text, ...text },
+    });
+  },
+
   addFolder: (name, color) => {
     const folder: Folder = { id: newId(), name, color, createdAt: Date.now() };
     set({ folders: [...get().folders, folder] });
@@ -84,6 +98,17 @@ export const useStore = create<State>((set, get) => ({
       folders: get().folders.filter((folder) => folder.id !== id),
       docs: get().docs.map((doc) => (doc.folderId === id ? { ...doc, folderId: null } : doc)),
     });
+  },
+
+  moveFolder: (id, toIndex) => {
+    const folders = [...get().folders];
+    const from = folders.findIndex((folder) => folder.id === id);
+    if (from < 0) {
+      return;
+    }
+    const [folder] = folders.splice(from, 1);
+    folders.splice(Math.max(0, Math.min(folders.length, toIndex)), 0, folder);
+    set({ folders });
   },
 
   addDoc: (doc) => {

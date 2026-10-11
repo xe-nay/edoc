@@ -1,11 +1,9 @@
-import * as LocalAuthentication from 'expo-local-authentication';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -15,11 +13,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { scanMorePages, sharePdf } from '../../../src/actions';
+import { scanMorePages } from '../../../src/actions';
+import { confirmIdentity } from '../../../src/auth';
 import { BottomBar, HeaderBar } from '../../../src/components/Bars';
 import { Icon } from '../../../src/components/Icon';
 import { PageImage } from '../../../src/components/PageImage';
-import { askDelete, askMove, askRename } from '../../../src/doc-menu';
+import { Zoomable } from '../../../src/components/Zoomable';
+import { askDelete, askMove, askRename, askSharePassword, shareDoc } from '../../../src/doc-menu';
 import { showError, success, tap } from '../../../src/native-ui';
 import { useStore } from '../../../src/store';
 import { colors } from '../../../src/theme';
@@ -32,10 +32,11 @@ export default function DocScreen() {
   const { width, height } = useWindowDimensions();
   const [index, setIndex] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
 
-  // A protected document asks for Face ID (or the passcode) when the app-wide lock is off.
+  // A protected document asks for Face ID, fingerprint or the passcode when the app-wide lock is off.
   const appLock = useStore((state) => state.settings.faceId);
-  const guarded = Platform.OS === 'ios' && Boolean(doc?.protected) && !appLock;
+  const guarded = Platform.OS !== 'web' && Boolean(doc?.protected) && !appLock;
   const [unlocked, setUnlocked] = useState(!guarded);
 
   useEffect(() => {
@@ -43,25 +44,22 @@ export default function DocScreen() {
       return;
     }
     let active = true;
-    (async () => {
-      const level = await LocalAuthentication.getEnrolledLevelAsync();
-      // Nothing to ask for on an iPhone without a passcode.
-      const allowed =
-        level === LocalAuthentication.SecurityLevel.NONE ||
-        (await LocalAuthentication.authenticateAsync({ promptMessage: 'Open protected document' })).success;
-      if (!active) {
-        return;
-      }
-      if (allowed) {
-        setUnlocked(true);
-      } else {
-        router.back();
-      }
-    })().catch(() => {
-      if (active) {
-        router.back();
-      }
-    });
+    confirmIdentity('Open protected document')
+      .then((allowed) => {
+        if (!active) {
+          return;
+        }
+        if (allowed) {
+          setUnlocked(true);
+        } else {
+          router.back();
+        }
+      })
+      .catch(() => {
+        if (active) {
+          router.back();
+        }
+      });
     return () => {
       active = false;
     };
@@ -91,13 +89,11 @@ export default function DocScreen() {
     }
   };
 
-  const share = async () => {
+  const share = async (password: string | null = null) => {
     tap();
     setBusy(true);
     try {
-      await sharePdf(doc.id);
-    } catch (error) {
-      showError(error);
+      await shareDoc(doc, password);
     } finally {
       setBusy(false);
     }
@@ -123,6 +119,7 @@ export default function DocScreen() {
         keyExtractor={(page) => page.id + page.file}
         horizontal
         pagingEnabled
+        scrollEnabled={!zoomed}
         showsHorizontalScrollIndicator={false}
         onScroll={onScroll}
         scrollEventThrottle={32}
@@ -132,22 +129,13 @@ export default function DocScreen() {
         renderItem={({ item }) => {
           const scale = Math.min(frameWidth / item.width, frameHeight / item.height);
           return (
-            <ScrollView
-              style={{ width, height }}
-              contentContainerStyle={[styles.page, { width, height, paddingTop: top, paddingBottom: bottom }]}
-              maximumZoomScale={5}
-              minimumZoomScale={1}
-              bouncesZoom
-              centerContent
-              showsHorizontalScrollIndicator={false}
-              showsVerticalScrollIndicator={false}
-              contentInsetAdjustmentBehavior="never">
+            <Zoomable width={width} height={height} top={top} bottom={bottom} onZoomChange={setZoomed}>
               <PageImage
                 doc={doc}
                 page={item}
                 style={[styles.sheet, { width: item.width * scale, height: item.height * scale }]}
               />
-            </ScrollView>
+            </Zoomable>
           );
         }}
       />
@@ -190,7 +178,18 @@ export default function DocScreen() {
       />
       <BottomBar
         items={[
-          { icon: 'square.and.arrow.up', label: 'Share PDF', onPress: share },
+          {
+            icon: 'square.and.arrow.up',
+            label: 'Share',
+            menu: [
+              { icon: 'square.and.arrow.up', label: 'Share PDF', onPress: () => share() },
+              {
+                icon: 'lock.fill',
+                label: 'Share with Password',
+                onPress: () => askSharePassword(doc, (password) => share(password)),
+              },
+            ],
+          },
           'space',
           { icon: 'square.grid.2x2', label: 'Pages', onPress: () => open('pages') },
           { icon: 'text.viewfinder', label: 'Text', onPress: () => open('text') },

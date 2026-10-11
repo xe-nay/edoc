@@ -4,12 +4,12 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { importFromFiles, importFromPhotos, scanDocument, type Target } from '../src/actions';
 import { nameThenOpen } from '../src/add-flow';
-import { BottomBar, HeaderBar } from '../src/components/Bars';
+import { BottomBar, HeaderBar, bottomBarInset } from '../src/components/Bars';
 import { DocCard, DocRow, FolderTile } from '../src/components/cards';
 import { Icon, type IconName } from '../src/components/Icon';
 import { Card, Chip, EmptyState, Glow, SectionLabel, tagIcons, tagLabels } from '../src/components/ui';
 import { openDocMenu } from '../src/doc-menu';
-import { chooseOption, confirmDelete, promptText, showError, success, tap } from '../src/native-ui';
+import { chooseOption, confirmDelete, deviceName, promptText, showError, success, tap } from '../src/native-ui';
 import { URGENT_DAYS } from '../src/reminders';
 import { daysUntil, searchDocs, useStore } from '../src/store';
 import { colors, folderColors, space } from '../src/theme';
@@ -304,7 +304,7 @@ export default function Home() {
                 ) : (
                   <EmptyState icon="doc.viewfinder" label="Scan your first document" />
                 )}
-                {docs.length === 0 ? <Text style={styles.hint}>Everything stays on this iPhone.</Text> : null}
+                {docs.length === 0 ? <Text style={styles.hint}>Everything stays on this {deviceName}.</Text> : null}
               </>
             ) : selected.length > 0 ? (
               <View style={[styles.section, styles.docs]}>
@@ -369,7 +369,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: space.md,
     paddingTop: space.sm,
-    paddingBottom: 40,
+    paddingBottom: 40 + bottomBarInset,
   },
   alert: {
     marginBottom: space.md,

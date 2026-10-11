@@ -1,7 +1,9 @@
 import * as LocalAuthentication from 'expo-local-authentication';
 import { usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+
+import EdocKit from '../../modules/edoc-kit';
 
 import { useStore } from '../store';
 import { colors, withAlpha } from '../theme';
@@ -47,6 +49,13 @@ export function LockGate({ children }: { children: ReactNode }) {
       unlock();
     }
   }, [unlock]);
+
+  // With the lock on, Android also keeps the app out of screenshots and the recent-apps preview.
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      EdocKit?.setScreenSecure?.(enabled).catch(() => {});
+    }
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled) {

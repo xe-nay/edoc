@@ -1,74 +1,89 @@
 import * as Haptics from 'expo-haptics';
 import { ActionSheetIOS, Alert, Platform } from 'react-native';
 
-const isIOS = Platform.OS === 'ios';
+import { showDialog } from './components/Dialogs';
 
-// Native text prompt, as used by Notes and Files for naming things.
+const isIOS = Platform.OS === 'ios';
+const isDevice = Platform.OS !== 'web';
+
+// How the device is named in texts shown to the user.
+export const deviceName = isIOS ? 'iPhone' : 'phone';
+
+// Text prompt for naming things: the system one on iOS, the in-app one elsewhere.
 export function promptText(title: string, initial: string, onSubmit: (value: string) => void) {
-  if (!isIOS) {
-    const value = (globalThis as { prompt?: (message: string, initial: string) => string | null }).prompt?.(title, initial);
+  const submit = (value?: string) => {
     if (value?.trim()) {
       onSubmit(value.trim());
     }
+  };
+  if (isIOS) {
+    Alert.prompt(
+      title,
+      undefined,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Save', onPress: submit },
+      ],
+      'plain-text',
+      initial,
+    );
     return;
   }
-  Alert.prompt(
+  showDialog({
+    kind: 'prompt',
     title,
-    undefined,
-    [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Save',
-        onPress: (value?: string) => {
-          if (value?.trim()) {
-            onSubmit(value.trim());
-          }
-        },
-      },
-    ],
-    'plain-text',
     initial,
-  );
+    buttons: [
+      { label: 'Cancel', style: 'cancel' },
+      { label: 'Save', onPress: submit },
+    ],
+  });
 }
 
 // Naming step shown right after a document is added: type a name, or save as-is to keep the suggestion.
 export function promptName(suggestion: string, onDone: (name: string) => void) {
-  if (!isIOS) {
-    onDone(suggestion);
+  const message = `Leave empty to keep “${suggestion}”.`;
+  const done = (value?: string) => onDone(value?.trim() || suggestion);
+  if (isIOS) {
+    Alert.prompt('Name', message, [{ text: 'Save', onPress: done }], 'plain-text');
     return;
   }
-  Alert.prompt(
-    'Name',
-    `Leave empty to keep “${suggestion}”.`,
-    [{ text: 'Save', onPress: (value?: string) => onDone(value?.trim() || suggestion) }],
-    'plain-text',
-  );
+  showDialog({ kind: 'prompt', title: 'Name', message, buttons: [{ label: 'Save', onPress: done }] });
 }
 
-// Native prompt with a hidden text field, for backup passwords.
+// Prompt with a hidden text field, for backup passwords.
 export function promptSecret(
   title: string,
   message: string | undefined,
   onSubmit: (value: string) => void,
   onCancel?: () => void,
 ) {
-  if (!isIOS) {
-    onSubmit('');
+  if (isIOS) {
+    Alert.prompt(
+      title,
+      message,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: onCancel },
+        { text: 'Continue', onPress: (value?: string) => onSubmit(value ?? '') },
+      ],
+      'secure-text',
+    );
     return;
   }
-  Alert.prompt(
+  showDialog({
+    kind: 'prompt',
     title,
     message,
-    [
-      { text: 'Cancel', style: 'cancel', onPress: onCancel },
-      { text: 'Continue', onPress: (value?: string) => onSubmit(value ?? '') },
+    secure: true,
+    buttons: [
+      { label: 'Cancel', style: 'cancel', onPress: onCancel },
+      { label: 'Continue', onPress: onSubmit },
     ],
-    'secure-text',
-  );
+  });
 }
 
 export function confirmDelete(title: string, message: string | undefined, onConfirm: () => void) {
-  if (!isIOS) {
+  if (!isDevice) {
     onConfirm();
     return;
   }
@@ -86,6 +101,7 @@ export type Choice = {
 
 export function chooseOption(choices: Choice[], title?: string) {
   if (!isIOS) {
+    showDialog({ kind: 'sheet', title, choices });
     return;
   }
   const destructiveButtonIndex = choices.findIndex((choice) => choice.destructive);
@@ -107,7 +123,7 @@ export function chooseOption(choices: Choice[], title?: string) {
 
 export function showError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (isIOS) {
+  if (isDevice) {
     Alert.alert('Something went wrong', message);
   } else {
     console.warn(message);
@@ -115,13 +131,13 @@ export function showError(error: unknown) {
 }
 
 export function tap() {
-  if (isIOS) {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  if (isDevice) {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   }
 }
 
 export function success() {
-  if (isIOS) {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  if (isDevice) {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
   }
 }

@@ -65,7 +65,14 @@ const glow = `<svg xmlns="http://www.w3.org/2000/svg" width="860" height="760" v
   <rect width="860" height="760" fill="url(#left)"/>
 </svg>`;
 
+// Android draws its own shape around the icon, so the lock sits smaller on a transparent canvas.
+const adaptive = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>${lockDefs}</defs>
+  <g transform="translate(512 512) scale(0.58) translate(-512 -516)">${lock}</g>
+</svg>`;
+
 await mkdir('assets', { recursive: true });
+await sharp(Buffer.from(adaptive)).png().toFile('assets/adaptive-icon.png');
 await sharp(Buffer.from(icon)).png().toFile('assets/icon.png');
 await sharp(Buffer.from(splash)).resize(512, 512).png().toFile('assets/splash.png');
 await sharp(Buffer.from(glow)).png().toFile('assets/glow.png');

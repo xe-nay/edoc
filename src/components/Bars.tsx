@@ -52,6 +52,9 @@ function renderItem(item: BarItem, index: number) {
   );
 }
 
+// The system toolbar adjusts scroll insets by itself, so screens need no extra padding for it.
+export const bottomBarInset = 0;
+
 export function HeaderBar({ side = 'right', items }: { side?: 'left' | 'right'; items: BarAction[] }) {
   return <Stack.Toolbar placement={side}>{items.map(renderItem)}</Stack.Toolbar>;
 }

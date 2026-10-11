@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { Platform, View } from 'react-native';
 
 import { queueText, refreshReminders, resetTemp, secureStorage } from '../src/actions';
+import { DialogHost } from '../src/components/Dialogs';
 import { LockGate } from '../src/components/LockGate';
 import { useStore } from '../src/store';
 import { colors } from '../src/theme';
@@ -69,8 +70,10 @@ export default function RootLayout() {
           <Stack.Screen name="doc/[id]/text" options={{ ...sheet, sheetAllowedDetents: [0.64, 1] }} />
           <Stack.Screen name="folder-color" options={{ ...sheet, sheetAllowedDetents: [0.34] }} />
           <Stack.Screen name="settings" options={{ title: 'Settings', headerLargeTitle: true }} />
+          <Stack.Screen name="export" options={{ title: 'Export Backup' }} />
         </Stack>
       </LockGate>
+      <DialogHost />
     </ThemeProvider>
   );
 }

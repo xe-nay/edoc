@@ -1,7 +1,8 @@
-name: iOS build
+name: Build
 
-# Builds an unsigned eDoc.ipa on a cloud Mac. The file is signed and installed
-# on the iPhone with a free Apple ID. Only GitHub's own actions are used.
+# iOS: builds an unsigned eDoc.ipa on a cloud Mac; it is signed and installed on the iPhone
+# with a free Apple ID. Android: builds eDoc.apk and signs it with the project's own key.
+# Only GitHub's own actions are used.
 on:
   workflow_dispatch:
   push:
@@ -13,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: ios-${{ github.ref }}
+  group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,7 +44,7 @@ jobs:
         run: |
           VERSION="1.0.${{ github.run_number }}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('app.json','utf8'));c.expo.version=process.argv[1];c.expo.ios.buildNumber=process.argv[2];fs.writeFileSync('app.json',JSON.stringify(c,null,2));" "$VERSION" "${{ github.run_number }}"
+          node scripts/set-version.mjs "$VERSION" "${{ github.run_number }}"
 
       - name: Generate the native project
         run: npx expo prebuild --platform ios --no-install
@@ -82,7 +83,7 @@ jobs:
         run: |
           APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
           test -n "$APP"
-          rm -rf Payload && mkdir Payload
+          mkdir Payload
           cp -R "$APP" Payload/
           zip -qry eDoc.ipa Payload
           ls -lh eDoc.ipa
@@ -109,3 +110,57 @@ jobs:
           name: xcodebuild-log
           path: xcodebuild.log
           retention-days: 7
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Set the version
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          node scripts/set-version.mjs "$VERSION" "${{ github.run_number }}"
+
+      - name: Generate the native project
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Build
+        run: cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
+
+      # The build is first signed with a throwaway key; it is replaced by the project's own key,
+      # kept in the repository's encrypted secrets, so that updates install over each other.
+      - name: Sign
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          KEYSTORE=$(mktemp)
+          echo "$KEYSTORE_B64" | base64 -d > "$KEYSTORE"
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" sign --ks "$KEYSTORE" --ks-type pkcs12 --ks-key-alias edoc \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEYSTORE_PASSWORD \
+            --out eDoc.apk android/app/build/outputs/apk/release/app-release.apk
+          "$APKSIGNER" verify eDoc.apk
+          : > "$KEYSTORE"
+          ls -lh eDoc.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eDoc-apk
+          path: eDoc.apk
+          retention-days: 14

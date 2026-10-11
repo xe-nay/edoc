@@ -13,6 +13,8 @@ type EdocKitModule = {
   scan(outDir: string): Promise<KitPage[]>;
   // Encrypts the tree while the device is locked and sets whether backups include it.
   secure(uri: string, excludeFromBackup: boolean): Promise<void>;
+  // Android only: keeps the app out of screenshots and the recent-apps preview.
+  setScreenSecure?(enabled: boolean): Promise<void>;
   recognizeText(uri: string): Promise<string>;
   // quarterTurns rotates clockwise in 90 degree steps; maxDimension 0 keeps the size.
   render(uri: string, outUri: string, quarterTurns: number, filter: KitFilter, maxDimension: number): Promise<KitPage>;
@@ -25,7 +27,8 @@ type EdocKitModule = {
   sealArchive(uri: string, outUri: string, password: string): Promise<void>;
   openArchive(uri: string, outUri: string, password: string): Promise<void>;
   pdfToImages(uri: string, outDir: string): Promise<KitPage[]>;
-  makePdf(uris: string[], outUri: string): Promise<string>;
+  // A non-empty password produces an encrypted PDF that asks for it when opened.
+  makePdf(uris: string[], outUri: string, password: string): Promise<string>;
 };
 
 // Null outside iOS (for example in the web preview).

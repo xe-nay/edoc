@@ -241,7 +241,8 @@ export async function importFromPhotos(target: Target): Promise<string | null> {
 
 // The shared PDF is an ordinary file, also for protected documents: it is decrypted
 // for the share sheet and the working copy is removed as soon as the sheet closes.
-export async function sharePdf(docId: string) {
+// With a password the PDF is encrypted and asks for it when opened.
+export async function sharePdf(docId: string, password: string | null = null) {
   const doc = findDoc(docId);
   if (!doc || doc.pages.length === 0) {
     return;
@@ -253,6 +254,7 @@ export async function sharePdf(docId: string) {
     await kit().makePdf(
       doc.pages.map((page) => pageUri(doc, page.file)),
       out.uri,
+      password ?? '',
     );
     await Sharing.shareAsync(out.uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' });
   } finally {
@@ -479,13 +481,23 @@ export function queueText(onlyDocId?: string) {
 
 // Writes every document into one archive and opens the share sheet. With a password the
 // archive is encrypted; without one it is a plain ZIP (not offered once protected documents exist).
-export async function exportBackup(password: string | null) {
-  if (!password && hasProtectedDocs()) {
-    throw new Error('A password is required because some documents are protected');
-  }
+// onlyDocIds limits the backup to those documents (and the folders they are in).
+export async function exportBackup(password: string | null, onlyDocIds?: string[]) {
   flushStore();
   ensureDirs();
-  const { docs, text } = useStore.getState();
+  const state = useStore.getState();
+  const docs = onlyDocIds ? state.docs.filter((doc) => onlyDocIds.includes(doc.id)) : state.docs;
+  if (!password && docs.some((doc) => doc.protected)) {
+    throw new Error('A password is required because some documents are protected');
+  }
+  let library = snapshotLibrary();
+  let text = state.text;
+  if (onlyDocIds) {
+    const folderIds = new Set(docs.map((doc) => doc.folderId));
+    const pageIds = new Set(docs.flatMap((doc) => doc.pages.map((page) => page.id)));
+    library = { ...library, docs, folders: state.folders.filter((folder) => folderIds.has(folder.id)) };
+    text = Object.fromEntries(Object.entries(state.text).filter(([pageId]) => pageIds.has(pageId)));
+  }
   const stamp = new Date().toISOString().slice(0, 10);
   const scratch = scratchDir();
   try {
@@ -494,7 +506,7 @@ export async function exportBackup(password: string | null) {
     const handle = archive.open(FileMode.WriteOnly);
     try {
       const zip = createZipWriter({ write: (bytes) => handle.writeBytes(bytes) });
-      zip.add('library.json', textToBytes(JSON.stringify(snapshotLibrary())));
+      zip.add('library.json', textToBytes(JSON.stringify(library)));
       zip.add('text.json', textToBytes(JSON.stringify(text)));
       for (const doc of docs) {
         for (const name of fileNames(doc.pages)) {
@@ -552,8 +564,11 @@ export function discardBackup(picked: PickedBackup) {
   discard(picked.uri);
 }
 
-// Replaces the whole library with the content of a backup archive.
-export async function restoreBackup(picked: PickedBackup, password: string | null) {
+export type RestoreMode = 'replace' | 'merge';
+
+// Brings in the content of a backup archive, made on an iPhone or an Android phone alike.
+// 'replace' swaps the whole library for it; 'merge' adds it to what is already here.
+export async function restoreBackup(picked: PickedBackup, password: string | null, mode: RestoreMode) {
   ensureDirs();
   const scratch = scratchDir();
   const staging = new Directory(scratch, 'files');
@@ -621,11 +636,26 @@ export async function restoreBackup(picked: PickedBackup, password: string | nul
       }
     }
 
-    await Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
-    if (filesDir.exists) {
-      filesDir.delete();
+    if (mode === 'replace') {
+      await Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
+      if (filesDir.exists) {
+        filesDir.delete();
+      }
+      staging.moveSync(filesDir);
+    } else {
+      // A document that is already here under the same id is replaced by the one from the backup.
+      for (const doc of library.docs) {
+        const existing = findDoc(doc.id);
+        if (existing) {
+          await cancelReminders(existing.reminderIds);
+        }
+        discard(docDir(doc.id));
+        const incoming = new Directory(staging, doc.id);
+        if (incoming.exists) {
+          incoming.moveSync(docDir(doc.id));
+        }
+      }
     }
-    staging.moveSync(filesDir);
   } finally {
     discard(scratch);
   }
@@ -636,9 +666,13 @@ export async function restoreBackup(picked: PickedBackup, password: string | nul
     const reminderIds = doc.expiresAt ? await scheduleReminders({ ...doc, reminderIds: [] }, doc.expiresAt) : [];
     docs.push({ ...doc, reminderIds });
   }
-  // Privacy settings of this iPhone win over the ones stored in the backup.
-  const settings = useStore.getState().settings;
-  useStore.getState().replaceAll({ ...library, docs, settings }, text);
+  if (mode === 'replace') {
+    // Privacy settings of this device win over the ones stored in the backup.
+    const settings = useStore.getState().settings;
+    useStore.getState().replaceAll({ ...library, docs, settings }, text);
+  } else {
+    useStore.getState().mergeIn(library.folders, docs, text);
+  }
   flushStore();
   await secureStorage();
   queueText();

@@ -1,7 +1,12 @@
+import { Alert } from 'react-native';
+
 import { deleteDoc, renameDoc, sharePdf } from './actions';
-import { chooseOption, confirmDelete, promptText, showError } from './native-ui';
+import { confirmIdentity } from './auth';
+import { chooseOption, confirmDelete, promptSecret, promptText, showError } from './native-ui';
 import { useStore } from './store';
 import type { Doc } from './types';
+
+const MIN_PDF_PASSWORD = 4;
 
 // Lets the current sheet finish dismissing before the next native dialog appears.
 function later(action: () => void) {
@@ -36,12 +41,37 @@ export function askDelete(doc: Doc, onDeleted?: () => void) {
   });
 }
 
+// Shares the document as a PDF. A protected document leaves the app only after
+// Face ID, fingerprint or the passcode, wherever the export was started from.
+export async function shareDoc(doc: Doc, password: string | null = null) {
+  try {
+    if (doc.protected && !(await confirmIdentity('Export protected document'))) {
+      return;
+    }
+    await sharePdf(doc.id, password);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+// Asks for a password, then shares a PDF that cannot be opened without it.
+export function askSharePassword(doc: Doc, share: (password: string) => void = (password) => shareDoc(doc, password)) {
+  promptSecret('PDF Password', 'Anyone opening the PDF will need this password.', (password) => {
+    if (password.length < MIN_PDF_PASSWORD) {
+      later(() => Alert.alert('Password too short', `Use at least ${MIN_PDF_PASSWORD} characters.`));
+      return;
+    }
+    later(() => share(password));
+  });
+}
+
 // Long-press menu for a document in any list.
 export function openDocMenu(doc: Doc) {
   const { updateDoc } = useStore.getState();
   chooseOption(
     [
-      { label: 'Share PDF', onPress: () => later(() => sharePdf(doc.id).catch(showError)) },
+      { label: 'Share PDF', onPress: () => later(() => shareDoc(doc)) },
+      { label: 'Share with Password', onPress: () => later(() => askSharePassword(doc)) },
       { label: 'Rename', onPress: () => later(() => askRename(doc)) },
       { label: 'Move', onPress: () => later(() => askMove(doc)) },
       {

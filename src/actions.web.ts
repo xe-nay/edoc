@@ -24,7 +24,7 @@ export async function importFromPhotos(_target: Target): Promise<string | null> 
   return null;
 }
 
-export async function sharePdf(_docId: string) {}
+export async function sharePdf(_docId: string, _password: string | null = null) {}
 
 export async function rotatePage(_docId: string, _pageId: string) {}
 
@@ -104,7 +104,7 @@ export type PickedBackup = {
   sealed: boolean;
 };
 
-export async function exportBackup(_password: string | null) {}
+export async function exportBackup(_password: string | null, _onlyDocIds?: string[]) {}
 
 export async function pickBackup(): Promise<PickedBackup | null> {
   return null;
@@ -112,6 +112,8 @@ export async function pickBackup(): Promise<PickedBackup | null> {
 
 export function discardBackup(_picked: PickedBackup) {}
 
-export async function restoreBackup(_picked: PickedBackup, _password: string | null) {}
+export type RestoreMode = 'replace' | 'merge';
+
+export async function restoreBackup(_picked: PickedBackup, _password: string | null, _mode: RestoreMode) {}
 
 export function resetTemp() {}

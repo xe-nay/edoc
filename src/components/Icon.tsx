@@ -17,7 +17,7 @@ const previewNames: Partial<Record<IconName, string>> = {
   plus: 'add',
   'chevron.right': 'chevron_right',
   'lock.fill': 'lock',
-  faceid: 'familiar_face_and_zone',
+  faceid: 'fingerprint',
   'square.and.arrow.up': 'ios_share',
   trash: 'delete',
   'star.fill': 'star',

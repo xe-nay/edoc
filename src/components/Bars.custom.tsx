@@ -1,0 +1,139 @@
+// Navigation bar buttons and bottom toolbar drawn by the app itself. Used on Android (and in the
+// browser preview), where the system does not provide iOS-style glass bars.
+import { Stack } from 'expo-router';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { colors, withAlpha } from '../theme';
+import type { BarAction, BarItem } from './bar-types';
+import { showDialog } from './Dialogs';
+import { Icon } from './Icon';
+
+function openMenu(item: BarAction) {
+  showDialog({
+    kind: 'sheet',
+    title: item.label,
+    choices: (item.menu ?? []).map((entry) => ({
+      label: entry.label,
+      icon: entry.icon,
+      destructive: entry.destructive,
+      checked: entry.on,
+      disabled: entry.disabled,
+      onPress: entry.onPress,
+    })),
+  });
+}
+
+function Button({ item, compact }: { item: BarAction; compact?: boolean }) {
+  const tint = item.destructive ? colors.danger : colors.text;
+  return (
+    <Pressable
+      accessibilityLabel={item.label}
+      disabled={item.disabled}
+      hitSlop={compact ? 6 : 0}
+      android_ripple={{ color: withAlpha(colors.accentSoft, 0.2), borderless: true }}
+      onPress={() => (item.menu ? openMenu(item) : item.onPress?.())}
+      style={[
+        compact ? styles.headerButton : styles.button,
+        item.prominent && styles.prominent,
+        item.disabled && { opacity: 0.35 },
+      ]}>
+      {item.icon ? <Icon name={item.icon} size={21} color={tint} /> : <Text style={styles.label}>{item.label}</Text>}
+    </Pressable>
+  );
+}
+
+export function HeaderBar({ side = 'right', items }: { side?: 'left' | 'right'; items: BarAction[] }) {
+  const render = () => (
+    <View style={styles.header}>
+      {items.map((item, index) => (
+        <Button key={index} item={item} compact />
+      ))}
+    </View>
+  );
+  return <Stack.Screen options={side === 'left' ? { headerLeft: render } : { headerRight: render }} />;
+}
+
+export function BottomBar({ items }: { items: BarItem[] }) {
+  const insets = useSafeAreaInsets();
+  // On Android the search field lives in the top bar, so its slot here is dropped.
+  const visible = Platform.OS === 'android' ? items.filter((item) => item !== 'search') : items;
+  const compacted = visible.filter((item, index) => !(item === 'space' && visible[index - 1] === 'space'));
+  return (
+    <View style={[styles.bottom, { bottom: insets.bottom + 14 }]} pointerEvents="box-none">
+      {compacted.map((item, index) => {
+        if (item === 'space') {
+          return <View key={index} style={{ flex: 1 }} pointerEvents="none" />;
+        }
+        if (item === 'search') {
+          return (
+            <View key={index} style={styles.search}>
+              <Icon name="magnifyingglass" size={17} color={colors.textDim} />
+              <Text style={{ color: colors.textDim, fontSize: 16 }}>Search</Text>
+            </View>
+          );
+        }
+        return <Button key={index} item={item} />;
+      })}
+    </View>
+  );
+}
+
+// Height the bottom bar covers, for screens to pad their scrolling content.
+export const bottomBarInset = 84;
+
+const glass = {
+  backgroundColor: 'rgba(38, 54, 96, 0.86)',
+  borderWidth: StyleSheet.hairlineWidth,
+  borderColor: colors.hairlineStrong,
+} as const;
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  headerButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bottom: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  button: {
+    minWidth: 50,
+    height: 50,
+    paddingHorizontal: 13,
+    borderRadius: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...glass,
+  },
+  prominent: {
+    backgroundColor: colors.accent,
+    borderColor: 'transparent',
+  },
+  label: {
+    color: colors.text,
+    fontSize: 16,
+  },
+  search: {
+    flex: 4,
+    height: 50,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    ...glass,
+  },
+});

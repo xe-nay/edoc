@@ -328,13 +328,22 @@ public class EdocKitModule: Module {
     }
 
     // Builds a PDF with one page per image, embedding the JPEG data as-is.
-    AsyncFunction("makePdf") { (uris: [String], outUri: String) -> String in
+    // A non-empty password encrypts the PDF, which then asks for it when opened.
+    AsyncFunction("makePdf") { (uris: [String], outUri: String, password: String) -> String in
       let out = fileURL(outUri)
       try FileManager.default.createDirectory(
         at: out.deletingLastPathComponent(),
         withIntermediateDirectories: true
       )
-      let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842))
+      let format = UIGraphicsPDFRendererFormat()
+      if !password.isEmpty {
+        format.documentInfo = [
+          kCGPDFContextUserPassword as String: password,
+          kCGPDFContextOwnerPassword as String: password,
+          kCGPDFContextEncryptionKeyLength as String: 128
+        ]
+      }
+      let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842), format: format)
       try renderer.writePDF(to: out) { context in
         for uri in uris {
           autoreleasepool {

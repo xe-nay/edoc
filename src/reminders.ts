@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 
 import type { Doc } from './types';
 
@@ -18,6 +19,13 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
+
+if (Platform.OS === 'android') {
+  Notifications.setNotificationChannelAsync('default', {
+    name: 'Expiry reminders',
+    importance: Notifications.AndroidImportance.DEFAULT,
+  }).catch(() => {});
+}
 
 export async function ensureReminderPermission() {
   const current = await Notifications.getPermissionsAsync();

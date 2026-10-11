@@ -1,13 +1,14 @@
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { setExpiry, setProtected } from '../../../src/actions';
+import { confirmIdentity } from '../../../src/auth';
 import { Icon, type IconName } from '../../../src/components/Icon';
 import { Chip, formatDate, pageCount, tagIcons, tagLabels } from '../../../src/components/ui';
 import { askDelete, askMove, askRename } from '../../../src/doc-menu';
-import { showError, success } from '../../../src/native-ui';
+import { deviceName, showError, success } from '../../../src/native-ui';
 import { useStore } from '../../../src/store';
 import { colors, radius, space } from '../../../src/theme';
 import type { Tag } from '../../../src/types';
@@ -52,6 +53,10 @@ export default function InfoSheet() {
   const toggleProtected = async (next: boolean) => {
     setProtecting(true);
     try {
+      // Removing the protection decrypts the pages, so it needs the same proof as exporting.
+      if (!next && !(await confirmIdentity('Remove protection'))) {
+        return;
+      }
       await setProtected(doc.id, next);
       success();
     } catch (error) {
@@ -70,6 +75,27 @@ export default function InfoSheet() {
 
   const changeExpiry = (value: number | null) => {
     setExpiry(doc.id, value).catch(showError);
+  };
+
+  const pickDay = (date: Date | undefined) => {
+    if (date) {
+      const day = new Date(date);
+      day.setHours(0, 0, 0, 0);
+      changeExpiry(day.getTime());
+    }
+  };
+
+  // Android shows its date picker as a dialog opened on demand.
+  const openAndroidPicker = () => {
+    DateTimePickerAndroid.open({
+      value: new Date(doc.expiresAt ?? defaultExpiry.getTime()),
+      mode: 'date',
+      onChange: (event, date) => {
+        if (event.type === 'set') {
+          pickDay(date);
+        }
+      },
+    });
   };
 
   return (
@@ -104,25 +130,31 @@ export default function InfoSheet() {
         </Row>
         <Row icon="calendar.badge.clock" label="Expires">
           {doc.expiresAt === null ? (
-            <Pressable hitSlop={10} onPress={() => changeExpiry(defaultExpiry.getTime())}>
+            <Pressable
+              hitSlop={10}
+              onPress={() => (Platform.OS === 'android' ? openAndroidPicker() : changeExpiry(defaultExpiry.getTime()))}>
               <Text style={styles.link}>Add Date</Text>
             </Pressable>
           ) : (
             <>
-              <DateTimePicker
-                value={new Date(doc.expiresAt)}
-                mode="date"
-                display="compact"
-                themeVariant="dark"
-                accentColor={colors.accent}
-                onChange={(event, date) => {
-                  if (event.type === 'set' && date) {
-                    const day = new Date(date);
-                    day.setHours(0, 0, 0, 0);
-                    changeExpiry(day.getTime());
-                  }
-                }}
-              />
+              {Platform.OS === 'ios' ? (
+                <DateTimePicker
+                  value={new Date(doc.expiresAt)}
+                  mode="date"
+                  display="compact"
+                  themeVariant="dark"
+                  accentColor={colors.accent}
+                  onChange={(event, date) => {
+                    if (event.type === 'set') {
+                      pickDay(date);
+                    }
+                  }}
+                />
+              ) : (
+                <Pressable hitSlop={10} onPress={openAndroidPicker}>
+                  <Text style={styles.link}>{formatDate(doc.expiresAt, true)}</Text>
+                </Pressable>
+              )}
               <Pressable hitSlop={10} onPress={() => changeExpiry(null)}>
                 <Icon name="xmark.circle.fill" size={20} color={colors.textFaint} />
               </Pressable>
@@ -146,7 +178,7 @@ export default function InfoSheet() {
       </View>
       {doc.protected ? (
         <Text style={styles.footnote}>
-          Pages are encrypted with a key that exists only on this iPhone. Search finds this document by name only.
+          Pages are encrypted with a key that exists only on this {deviceName}. Search finds this document by name only.
         </Text>
       ) : null}
       {doc.expiresAt !== null ? (

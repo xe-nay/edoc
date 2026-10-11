@@ -4,7 +4,7 @@ import { FlatList, StyleSheet, View } from 'react-native';
 
 import { importFromFiles, importFromPhotos, scanDocument, type Target } from '../../src/actions';
 import { nameThenOpen } from '../../src/add-flow';
-import { BottomBar, HeaderBar } from '../../src/components/Bars';
+import { BottomBar, HeaderBar, bottomBarInset } from '../../src/components/Bars';
 import type { BarAction } from '../../src/components/bar-types';
 import { DocCard } from '../../src/components/cards';
 import { EmptyState, Glow, tagLabels } from '../../src/components/ui';
@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: space.md,
     paddingTop: space.md,
-    paddingBottom: 40,
+    paddingBottom: 40 + bottomBarInset,
   },
   columns: {
     gap: 14,
