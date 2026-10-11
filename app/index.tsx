@@ -6,10 +6,11 @@ import { importFromFiles, importFromPhotos, scanDocument, type Target } from '..
 import { nameThenOpen } from '../src/add-flow';
 import { BottomBar, HeaderBar } from '../src/components/Bars';
 import { DocCard, DocRow, FolderTile } from '../src/components/cards';
-import type { IconName } from '../src/components/Icon';
+import { Icon, type IconName } from '../src/components/Icon';
 import { Card, Chip, EmptyState, Glow, SectionLabel, tagIcons, tagLabels } from '../src/components/ui';
 import { openDocMenu } from '../src/doc-menu';
 import { chooseOption, confirmDelete, promptText, showError, success, tap } from '../src/native-ui';
+import { URGENT_DAYS } from '../src/reminders';
 import { daysUntil, searchDocs, useStore } from '../src/store';
 import { colors, folderColors, space } from '../src/theme';
 import type { Doc, Folder, Tag } from '../src/types';
@@ -85,6 +86,9 @@ export default function Home() {
         .sort((a, b) => (a.expiresAt ?? 0) - (b.expiresAt ?? 0)),
     [docs],
   );
+  // Documents about to expire are pinned to the very top; the rest stay in their own section.
+  const urgent = expiring.filter((doc) => daysUntil(doc.expiresAt ?? 0) <= URGENT_DAYS);
+  const upcoming = expiring.filter((doc) => daysUntil(doc.expiresAt ?? 0) > URGENT_DAYS);
   const recent = selected.slice(0, 6);
 
   // New documents land in whatever is selected at the top.
@@ -204,6 +208,17 @@ export default function Home() {
           )
         ) : (
           <>
+            {urgent.length > 0 ? (
+              <View style={styles.alert}>
+                <View style={styles.alertHead}>
+                  <Icon name="exclamationmark.triangle.fill" size={13} color={colors.danger} weight="semibold" />
+                  <Text style={styles.alertTitle}>Expiring soon</Text>
+                </View>
+                {urgent.map((doc) => (
+                  <DocRow key={doc.id} doc={doc} onPress={() => openDoc(doc.id)} onLongPress={() => openDocMenu(doc)} />
+                ))}
+              </View>
+            ) : null}
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -234,11 +249,11 @@ export default function Home() {
 
             {selection.kind === 'all' ? (
               <>
-                {expiring.length > 0 ? (
+                {upcoming.length > 0 ? (
                   <View style={styles.section}>
                     <SectionLabel>Expiring</SectionLabel>
                     <Card>
-                      {expiring.slice(0, 3).map((doc) => (
+                      {upcoming.slice(0, 3).map((doc) => (
                         <DocRow
                           key={doc.id}
                           doc={doc}
@@ -355,6 +370,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     paddingTop: space.sm,
     paddingBottom: 40,
+  },
+  alert: {
+    marginBottom: space.md,
+    borderRadius: 24,
+    borderCurve: 'continuous',
+    backgroundColor: 'rgba(255, 90, 110, 0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 90, 110, 0.4)',
+    overflow: 'hidden',
+  },
+  alertHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+  },
+  alertTitle: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
   },
   // The strip runs edge to edge so chips slide under the screen edges.
   strip: {

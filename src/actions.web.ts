@@ -79,6 +79,8 @@ export function queueText(_onlyDocId?: string) {}
 
 export async function secureStorage() {}
 
+export async function refreshReminders() {}
+
 export const MIN_PASSWORD_LENGTH = 8;
 
 export async function loadProtectedImage(doc: DocRef, file: string, _maxDimension: number) {

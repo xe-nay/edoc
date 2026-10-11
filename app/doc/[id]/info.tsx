@@ -150,7 +150,7 @@ export default function InfoSheet() {
         </Text>
       ) : null}
       {doc.expiresAt !== null ? (
-        <Text style={styles.footnote}>Reminders 30 days before, 7 days before and on the day.</Text>
+        <Text style={styles.footnote}>Reminders 30 days before, 5 days before and on the day.</Text>
       ) : null}
 
       <Pressable

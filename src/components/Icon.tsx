@@ -42,6 +42,7 @@ const previewNames: Partial<Record<IconName, string>> = {
   'arrow.down.doc': 'download',
   externaldrive: 'hard_drive',
   icloud: 'cloud',
+  'exclamationmark.triangle.fill': 'warning',
   'arrow.counterclockwise': 'restore',
   'square.grid.2x2': 'grid_view',
   'tag.fill': 'label',

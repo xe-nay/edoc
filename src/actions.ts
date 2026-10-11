@@ -401,6 +401,26 @@ export async function setExpiry(docId: string, expiresAt: number | null) {
   useStore.getState().updateDoc(docId, { expiresAt, reminderIds });
 }
 
+// Rebuilds every reminder at launch, so documents dated before a change of the
+// reminder schedule follow the current one. Never asks for permission.
+export async function refreshReminders() {
+  for (const doc of useStore.getState().docs) {
+    if (doc.expiresAt === null) {
+      continue;
+    }
+    const reminderIds = await scheduleReminders(doc, doc.expiresAt, false);
+    const current = findDoc(doc.id);
+    if (current && current.expiresAt === doc.expiresAt) {
+      // Written straight to the store entry so the document's "last changed" date is untouched.
+      useStore.setState({
+        docs: useStore.getState().docs.map((item) => (item.id === doc.id ? { ...item, reminderIds } : item)),
+      });
+    } else {
+      await cancelReminders(reminderIds);
+    }
+  }
+}
+
 export async function renameDoc(docId: string, name: string) {
   const doc = findDoc(docId);
   const trimmed = name.trim();

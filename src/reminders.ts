@@ -5,7 +5,10 @@ import type { Doc } from './types';
 const DAY = 24 * 60 * 60 * 1000;
 
 // Days before the expiry date on which a reminder fires (at 09:00).
-const LEAD_DAYS = [30, 7, 0];
+const LEAD_DAYS = [30, 5, 0];
+
+// A document this close to its expiry date is shown at the top of the home screen.
+export const URGENT_DAYS = 5;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -41,9 +44,18 @@ function reminderBody(lead: number) {
 }
 
 // Replaces the reminders of a document and returns the new notification ids.
-export async function scheduleReminders(doc: Pick<Doc, 'id' | 'reminderIds'>, expiresAt: number | null) {
+// With ask set to false nothing is scheduled unless notifications were already allowed.
+export async function scheduleReminders(
+  doc: Pick<Doc, 'id' | 'reminderIds'>,
+  expiresAt: number | null,
+  ask = true,
+) {
   await cancelReminders(doc.reminderIds);
-  if (expiresAt === null || !(await ensureReminderPermission())) {
+  if (expiresAt === null) {
+    return [];
+  }
+  const allowed = ask ? await ensureReminderPermission() : (await Notifications.getPermissionsAsync()).granted;
+  if (!allowed) {
     return [];
   }
   const ids: string[] = [];
