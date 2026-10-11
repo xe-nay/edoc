@@ -7,5 +7,5 @@ const [version, build] = process.argv.slice(2);
 const config = JSON.parse(readFileSync('app.json', 'utf8'));
 config.expo.version = version;
 config.expo.ios.buildNumber = String(build);
-config.expo.android.versionCode = Number(build);
+// The Android version code is set in app.config.js.
 writeFileSync('app.json', JSON.stringify(config, null, 2));
