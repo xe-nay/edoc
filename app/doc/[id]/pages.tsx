@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { deletePage, movePage, rescanPage, rotatePage, scanMorePages, setPageFilter } from '../../../src/actions';
+import { useColumns } from '../../../src/columns';
 import { BottomBar, HeaderBar, bottomBarInset } from '../../../src/components/Bars';
 import type { BarAction } from '../../../src/components/bar-types';
 import { PageImage } from '../../../src/components/PageImage';
@@ -18,7 +19,9 @@ const filters: { value: PageFilter; label: string }[] = [
   { value: 'bw', label: 'Black & White' },
 ];
 
-const COLUMNS = 3;
+// Three columns on a phone; a tablet fits more pages of about the same size.
+const PHONE_COLUMNS = 3;
+const CELL_WIDTH = 130;
 
 export default function PagesScreen() {
   const params = useLocalSearchParams<{ id: string; page?: string }>();
@@ -28,6 +31,7 @@ export default function PagesScreen() {
     () => doc?.pages[Number(params.page ?? 0)]?.id ?? doc?.pages[0]?.id ?? null,
   );
   const [busy, setBusy] = useState(false);
+  const columns = useColumns(PHONE_COLUMNS, CELL_WIDTH);
 
   if (!doc) {
     return <View style={styles.fill} />;
@@ -97,7 +101,7 @@ export default function PagesScreen() {
 
   // Pad the last row so every cell keeps the same width.
   const cells: (Page | null)[] = [...doc.pages];
-  while (cells.length % COLUMNS !== 0) {
+  while (cells.length % columns !== 0) {
     cells.push(null);
   }
 
@@ -106,7 +110,8 @@ export default function PagesScreen() {
       <FlatList
         data={cells}
         keyExtractor={(item, cellIndex) => (item ? item.id + item.file : `empty-${cellIndex}`)}
-        numColumns={COLUMNS}
+        key={columns}
+        numColumns={columns}
         contentInsetAdjustmentBehavior="automatic"
         columnWrapperStyle={styles.columns}
         contentContainerStyle={styles.content}

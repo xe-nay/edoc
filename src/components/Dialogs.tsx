@@ -1,7 +1,7 @@
 // In-app text prompt and option sheet. iOS uses the system ones; these stand in on
 // Android (and in the browser preview), drawn in the app's own style.
 import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, radius, space } from '../theme';
@@ -47,6 +47,8 @@ export function showDialog(request: Request) {
 
 export function DialogHost() {
   const insets = useSafeAreaInsets();
+  // On a tablet the sheet keeps a phone-like width, centred at the bottom.
+  const sheetWidth = Math.min(useWindowDimensions().width - 24, SHEET_MAX_WIDTH);
   const [request, setRequest] = useState<Request | null>(null);
   const [value, setValue] = useState('');
   const input = useRef<TextInput>(null);
@@ -90,7 +92,7 @@ export function DialogHost() {
     return (
       <Modal transparent statusBarTranslucent navigationBarTranslucent animationType="fade" onRequestClose={cancel}>
         <Pressable style={styles.backdrop} onPress={cancel}>
-          <Pressable style={styles.sheet} onPress={() => {}}>
+          <Pressable style={[styles.sheet, { width: sheetWidth }]} onPress={() => {}}>
             {request.title ? (
               <Text numberOfLines={1} style={styles.sheetTitle}>
                 {request.title}
@@ -116,7 +118,7 @@ export function DialogHost() {
               );
             })}
           </Pressable>
-          <Pressable style={[styles.sheet, styles.cancel, { marginBottom: insets.bottom + 12 }]} onPress={cancel}>
+          <Pressable style={[styles.sheet, styles.cancel, { width: sheetWidth, marginBottom: insets.bottom + 12 }]} onPress={cancel}>
             <Text style={styles.cancelText}>Cancel</Text>
           </Pressable>
         </Pressable>
@@ -170,6 +172,8 @@ export function DialogHost() {
   );
 }
 
+const SHEET_MAX_WIDTH = 520;
+
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
@@ -181,7 +185,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   sheet: {
-    marginHorizontal: 12,
+    alignSelf: 'center',
     borderRadius: radius.lg,
     backgroundColor: '#0C1730',
     borderWidth: StyleSheet.hairlineWidth,
@@ -223,6 +227,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   prompt: {
+    width: '100%',
+    maxWidth: 440,
+    alignSelf: 'center',
     borderRadius: radius.lg,
     backgroundColor: '#0C1730',
     borderWidth: StyleSheet.hairlineWidth,

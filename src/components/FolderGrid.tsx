@@ -8,6 +8,7 @@ import {
   type GestureResponderEvent,
 } from 'react-native';
 
+import { rowsOf, useColumns } from '../columns';
 import { tap } from '../native-ui';
 import { useStore } from '../store';
 import type { Folder } from '../types';
@@ -33,16 +34,19 @@ type Props = {
 };
 
 const GAP = 12;
-const COLUMNS = 2;
+// Two columns on a phone; a tablet fits more tiles of about the same size.
+const PHONE_COLUMNS = 2;
+const TILE_WIDTH = 180;
 // Holding a folder still for this long after it lifts opens its menu instead of dragging it.
 const MENU_DELAY_MS = 700;
 const MOVE_TOLERANCE = 8;
 
 type Drag = { folder: Folder; tile: GridTile };
 
-// Two-column folder grid. A long press lifts a folder so it can be dragged to a new place;
+// Folder grid. A long press lifts a folder so it can be dragged to a new place;
 // holding it still a little longer opens its menu (rename, colour, delete).
 export function FolderGrid({ tiles, onMenu, onDragChange }: Props) {
+  const columns = useColumns(PHONE_COLUMNS, TILE_WIDTH);
   const container = useRef<View>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const position = useRef(new Animated.ValueXY()).current;
@@ -58,15 +62,17 @@ export function FolderGrid({ tiles, onMenu, onDragChange }: Props) {
     startX: 0,
     startY: 0,
     menuTimer: null as ReturnType<typeof setTimeout> | null,
+    columns,
     tiles,
     onMenu,
     onDragChange,
   }).current;
+  state.columns = columns;
   state.tiles = tiles;
   state.onMenu = onMenu;
   state.onDragChange = onDragChange;
 
-  const cellWidth = () => (state.width - GAP * (COLUMNS - 1)) / COLUMNS;
+  const cellWidth = () => (state.width - GAP * (state.columns - 1)) / state.columns;
 
   const stop = () => {
     if (state.menuTimer) {
@@ -89,8 +95,8 @@ export function FolderGrid({ tiles, onMenu, onDragChange }: Props) {
     const folder = tile.folder;
     container.current?.measureInWindow((x, y, width) => {
       const index = state.tiles.findIndex((item) => item.key === tile.key);
-      const left = (index % COLUMNS) * (cellWidth() + GAP);
-      const top = Math.floor(index / COLUMNS) * (TILE_HEIGHT + GAP);
+      const left = (index % state.columns) * (cellWidth() + GAP);
+      const top = Math.floor(index / state.columns) * (TILE_HEIGHT + GAP);
       state.width = width;
       state.originX = x;
       state.originY = y;
@@ -142,9 +148,9 @@ export function FolderGrid({ tiles, onMenu, onDragChange }: Props) {
 
           // Which cell the finger is over; the fixed tiles at the start keep their places.
           const fixed = state.tiles.findIndex((item) => item.folder);
-          const column = Math.max(0, Math.min(COLUMNS - 1, Math.floor(x / (cellWidth() + GAP))));
+          const column = Math.max(0, Math.min(state.columns - 1, Math.floor(x / (cellWidth() + GAP))));
           const row = Math.max(0, Math.floor(y / (TILE_HEIGHT + GAP)));
-          const target = Math.max(fixed, Math.min(state.tiles.length - 1, row * COLUMNS + column));
+          const target = Math.max(fixed, Math.min(state.tiles.length - 1, row * state.columns + column));
           const from = state.tiles.findIndex((item) => item.key === current.tile.key);
           if (state.moved && target !== from) {
             LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -159,10 +165,7 @@ export function FolderGrid({ tiles, onMenu, onDragChange }: Props) {
     [],
   );
 
-  const rows: GridTile[][] = [];
-  for (let index = 0; index < tiles.length; index += COLUMNS) {
-    rows.push(tiles.slice(index, index + COLUMNS));
-  }
+  const rows = rowsOf(tiles, columns);
 
   return (
     <View
@@ -193,7 +196,7 @@ export function FolderGrid({ tiles, onMenu, onDragChange }: Props) {
               }}
             />
           ))}
-          {row.length < COLUMNS ? <View style={{ flex: 1 }} /> : null}
+          {row.length < columns ? <View style={{ flex: columns - row.length }} /> : null}
         </View>
       ))}
       {drag ? (

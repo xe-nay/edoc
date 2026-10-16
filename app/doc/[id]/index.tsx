@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { scanMorePages } from '../../../src/actions';
+import { rotatePage, scanMorePages } from '../../../src/actions';
 import { confirmIdentity } from '../../../src/auth';
 import { BottomBar, HeaderBar } from '../../../src/components/Bars';
 import { Icon } from '../../../src/components/Icon';
@@ -35,6 +35,15 @@ export default function DocScreen() {
   const [index, setIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  const list = useRef<FlatList>(null);
+  // Taps on Rotate run one after another, so two quick taps turn the page upside down.
+  const rotations = useRef<Promise<void>>(Promise.resolve());
+
+  // A tablet turned on its side changes the page width: stay on the same page.
+  useEffect(() => {
+    list.current?.scrollToOffset({ offset: index * width, animated: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [width]);
 
   // A protected document asks for Face ID, fingerprint or the passcode when the app-wide lock is off.
   const appLock = useStore((state) => state.settings.faceId);
@@ -113,12 +122,22 @@ export default function DocScreen() {
     }
   };
 
+  const rotate = () => {
+    const page = doc.pages[Math.min(index, doc.pages.length - 1)];
+    if (!page) {
+      return;
+    }
+    tap();
+    rotations.current = rotations.current.then(() => rotatePage(doc.id, page.id)).catch(showError);
+  };
+
   const open = (screen: 'pages' | 'info' | 'text') =>
     router.push({ pathname: `/doc/[id]/${screen}`, params: { id: doc.id, page: String(index) } });
 
   return (
     <View style={styles.fill} onLayout={(event) => setArea(event.nativeEvent.layout.height)}>
       <FlatList
+        ref={list}
         data={doc.pages}
         keyExtractor={(page) => page.id + page.file}
         horizontal
@@ -200,6 +219,7 @@ export default function DocScreen() {
             ],
           },
           'space',
+          { icon: 'rotate.right', label: 'Rotate', onPress: rotate },
           { icon: 'square.grid.2x2', label: 'Pages', onPress: () => open('pages') },
           { icon: 'text.viewfinder', label: 'Text', onPress: () => open('text') },
           { icon: 'info.circle', label: 'Details', onPress: () => open('info') },

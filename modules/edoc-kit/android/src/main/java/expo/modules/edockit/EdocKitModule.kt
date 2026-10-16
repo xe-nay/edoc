@@ -158,23 +158,41 @@ class EdocKitModule : Module() {
     return out.toByteArray()
   }
 
-  // Google's scanner turns pages by itself from the text it detects, and turns pages in some
-  // scripts (Arabic among them) upside down; it offers no way to switch that off. Each page is
-  // read both ways up and kept the way that yields clearly more legible text. When neither way
-  // is clearly better (no readable text), the page is left as the scanner returned it.
-  private fun legibleCharacters(bitmap: Bitmap, rotation: Int, recognizer: TextRecognizer): Int {
-    val text = Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, rotation)))
-    return text.textBlocks.sumOf { block ->
-      block.lines.sumOf { line ->
-        val letters = line.text.count { it.isLetterOrDigit() }
-        if (letters >= 3) letters else 0
+  // Google's scanner turns pages by itself from the text it detects. It gets Arabic pages (and
+  // pages shot with the phone lying flat) wrong, upside down or sideways, and offers no way to
+  // switch that off. Every page is therefore checked again here: the shape of its printed lines
+  // tells sideways from upright in any script, and which way is up. When the page has plenty of
+  // Latin text, the text recognizer has the final word on which way is up. When nothing is
+  // conclusive, the page is kept as the scanner returned it.
+  private fun legibleCharacters(bitmap: Bitmap, quarterTurns: Int, recognizer: TextRecognizer): Int {
+    val turned = if (quarterTurns % 4 == 0) bitmap else redraw(bitmap, quarterTurns, "none")
+    try {
+      val text = Tasks.await(recognizer.process(InputImage.fromBitmap(turned, 0)))
+      return text.textBlocks.sumOf { block ->
+        block.lines.sumOf { line ->
+          val letters = line.text.count { it.isLetterOrDigit() }
+          if (letters >= 3) letters else 0
+        }
+      }
+    } finally {
+      if (turned !== bitmap) {
+        turned.recycle()
       }
     }
   }
 
-  private fun needsHalfTurn(bitmap: Bitmap): Boolean {
+  // Clockwise quarter turns that bring a scanned page upright.
+  private fun uprightTurns(bitmap: Bitmap): Int {
+    val layout = try {
+      PageOrientation.read(bitmap)
+    } catch (error: Exception) {
+      null
+    }
+    val first = if (layout?.sideways == true) 1 else 0
+    val second = first + 2
+
     val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    return try {
+    val latin = try {
       val longest = max(bitmap.width, bitmap.height)
       val sample = if (longest > 1600) {
         val ratio = 1600f / longest
@@ -182,24 +200,34 @@ class EdocKitModule : Module() {
       } else {
         bitmap
       }
-      val asIs = legibleCharacters(sample, 0, recognizer)
-      val turned = legibleCharacters(sample, 180, recognizer)
+      val one = legibleCharacters(sample, first, recognizer)
+      val two = legibleCharacters(sample, second, recognizer)
       if (sample !== bitmap) {
         sample.recycle()
       }
-      turned >= 12 && turned > asIs * 2
+      when {
+        one >= 40 && one > two * 2 -> first
+        two >= 40 && two > one * 2 -> second
+        else -> null
+      }
     } catch (error: Exception) {
-      // The recognition model may not be available yet; keep the page as it is.
-      false
+      // The recognition model may not be available yet; the line shape decides alone.
+      null
     } finally {
       recognizer.close()
     }
+    if (latin != null) {
+      return latin % 4
+    }
+    val upright = layout?.upright ?: return 0
+    return (if (upright) first else second) % 4
   }
 
   // Writes a scanned page upright and returns its size.
   private fun saveUpright(data: ByteArray, file: File): Pair<Int, Int> {
     val upright = decodeUpright(data, 0)
-    val result = if (needsHalfTurn(upright)) redraw(upright, 2, "none") else upright
+    val turns = uprightTurns(upright)
+    val result = if (turns != 0) redraw(upright, turns, "none") else upright
     file.writeBytes(if (result === upright && !hasRotationTag(data)) data else jpeg(result, 90))
     val size = result.width to result.height
     if (result !== upright) {

@@ -24,7 +24,7 @@ function openMenu(item: BarAction) {
   });
 }
 
-function Button({ item, compact }: { item: BarAction; compact?: boolean }) {
+function Button({ item, compact, tight }: { item: BarAction; compact?: boolean; tight?: boolean }) {
   const tint = item.destructive ? colors.danger : colors.text;
   return (
     <Pressable
@@ -34,6 +34,7 @@ function Button({ item, compact }: { item: BarAction; compact?: boolean }) {
       onPress={() => (item.menu ? openMenu(item) : item.onPress?.())}
       style={({ pressed }) => [
         compact ? styles.headerButton : styles.button,
+        tight && styles.tight,
         item.prominent && styles.prominent,
         item.disabled && { opacity: 0.35 },
         pressed && { opacity: 0.6 },
@@ -59,8 +60,10 @@ export function BottomBar({ items }: { items: BarItem[] }) {
   // On Android the search field lives in the top bar, so its slot here is dropped.
   const visible = Platform.OS === 'android' ? items.filter((item) => item !== 'search') : items;
   const compacted = visible.filter((item, index) => !(item === 'space' && visible[index - 1] === 'space'));
+  // Six buttons or more only fit a phone's width with narrower buttons and gaps.
+  const tight = compacted.filter((item) => item !== 'space' && item !== 'search').length >= 6;
   return (
-    <View style={[styles.bottom, { bottom: insets.bottom + 14 }]} pointerEvents="box-none">
+    <View style={[styles.bottom, tight && { gap: 6 }, { bottom: insets.bottom + 14 }]} pointerEvents="box-none">
       {compacted.map((item, index) => {
         if (item === 'space') {
           return <View key={index} style={{ flex: 1 }} pointerEvents="none" />;
@@ -73,7 +76,7 @@ export function BottomBar({ items }: { items: BarItem[] }) {
             </View>
           );
         }
-        return <Button key={index} item={item} />;
+        return <Button key={index} item={item} tight={tight} />;
       })}
     </View>
   );
@@ -117,6 +120,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     ...glass,
+  },
+  tight: {
+    minWidth: 46,
+    paddingHorizontal: 11,
   },
   prominent: {
     backgroundColor: colors.accent,

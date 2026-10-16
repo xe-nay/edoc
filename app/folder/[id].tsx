@@ -4,6 +4,7 @@ import { FlatList, StyleSheet, View } from 'react-native';
 
 import { importFromFiles, importFromPhotos, scanDocument, type Target } from '../../src/actions';
 import { nameThenOpen } from '../../src/add-flow';
+import { useColumns } from '../../src/columns';
 import { BottomBar, HeaderBar, bottomBarInset } from '../../src/components/Bars';
 import type { BarAction } from '../../src/components/bar-types';
 import { DocCard } from '../../src/components/cards';
@@ -37,6 +38,7 @@ export default function FolderScreen() {
   const folder = useStore((state) => state.folders.find((item) => item.id === id));
   const docs = useStore((state) => state.docs);
   const [sort, setSort] = useState<Sort>('recent');
+  const columns = useColumns(2, 190);
 
   const visible = useMemo(() => {
     const matching = isAll
@@ -46,8 +48,11 @@ export default function FolderScreen() {
         : docs.filter((doc) => doc.folderId === id);
     return sortDocs(matching, sort);
   }, [docs, id, isAll, tag, sort]);
-  // An odd count gets an empty cell so the last card keeps its column width.
-  const cells: (Doc | null)[] = visible.length % 2 === 1 ? [...visible, null] : visible;
+  // The last row is padded with empty cells so its cards keep their column width.
+  const cells: (Doc | null)[] = [...visible];
+  while (cells.length % columns !== 0) {
+    cells.push(null);
+  }
 
   const target: Target = { folderId: folder ? folder.id : null, tag };
   const title = isAll ? 'All' : tag ? tagLabels[tag] : (folder?.name ?? '');
@@ -102,7 +107,9 @@ export default function FolderScreen() {
       <FlatList
         data={cells}
         keyExtractor={(item, index) => item?.id ?? `empty-${index}`}
-        numColumns={2}
+        // A list cannot change its column count in place, so a new count makes a new list.
+        key={columns}
+        numColumns={columns}
         contentInsetAdjustmentBehavior="automatic"
         columnWrapperStyle={styles.columns}
         contentContainerStyle={styles.content}

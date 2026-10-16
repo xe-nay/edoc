@@ -4,6 +4,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { importFromFiles, importFromPhotos, scanDocument, type Target } from '../src/actions';
 import { nameThenOpen } from '../src/add-flow';
+import { rowsOf, useColumns } from '../src/columns';
 import { BottomBar, HeaderBar, bottomBarInset } from '../src/components/Bars';
 import { DocCard, DocRow } from '../src/components/cards';
 import { FolderGrid, type GridTile } from '../src/components/FolderGrid';
@@ -36,14 +37,6 @@ function snippet(doc: Doc, text: Record<string, string>, query: string) {
   return undefined;
 }
 
-function pairs<T>(items: T[]) {
-  const rows: T[][] = [];
-  for (let index = 0; index < items.length; index += 2) {
-    rows.push(items.slice(index, index + 2));
-  }
-  return rows;
-}
-
 export default function Home() {
   const router = useRouter();
   const folders = useStore((state) => state.folders);
@@ -52,6 +45,7 @@ export default function Home() {
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<Selection>({ kind: 'all' });
   const [dragging, setDragging] = useState(false);
+  const columns = useColumns(2, 190);
 
   // A folder that was deleted while selected falls back to everything.
   const selection: Selection =
@@ -290,7 +284,7 @@ export default function Home() {
               </>
             ) : selected.length > 0 ? (
               <View style={[styles.section, styles.docs]}>
-                {pairs(selected).map((row, index) => (
+                {rowsOf(selected, columns).map((row, index) => (
                   <View key={index} style={styles.docsRow}>
                     {row.map((doc) => (
                       <DocCard
@@ -300,7 +294,7 @@ export default function Home() {
                         onLongPress={() => openDocMenu(doc, openDoc)}
                       />
                     ))}
-                    {row.length === 1 ? <View style={{ flex: 1 }} /> : null}
+                    {row.length < columns ? <View style={{ flex: columns - row.length }} /> : null}
                   </View>
                 ))}
               </View>
