@@ -110,7 +110,7 @@ export default function FolderScreen() {
         ListEmptyComponent={<EmptyState icon="doc.viewfinder" label="No documents" />}
         renderItem={({ item }) =>
           item ? (
-            <DocCard doc={item} onPress={() => openDoc(item.id)} onLongPress={() => openDocMenu(item)} />
+            <DocCard doc={item} onPress={() => openDoc(item.id)} onLongPress={() => openDocMenu(item, openDoc)} />
           ) : (
             <View style={{ flex: 1 }} />
           )

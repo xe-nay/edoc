@@ -1,6 +1,6 @@
 import { Alert } from 'react-native';
 
-import { deleteDoc, renameDoc, sharePdf } from './actions';
+import { deleteDoc, duplicateDoc, renameDoc, sharePdf } from './actions';
 import { confirmIdentity } from './auth';
 import { chooseOption, confirmDelete, promptSecret, promptText, showError } from './native-ui';
 import { useStore } from './store';
@@ -65,13 +65,27 @@ export function askSharePassword(doc: Doc, share: (password: string) => void = (
   });
 }
 
-// Long-press menu for a document in any list.
-export function openDocMenu(doc: Doc) {
+// Asks for the copy's name, makes the copy and hands its id to onDone (to open it).
+export function askDuplicate(doc: Doc, onDone?: (copyId: string) => void) {
+  promptText('Duplicate', `${doc.name} copy`, (name) => {
+    duplicateDoc(doc.id, name)
+      .then((copyId) => {
+        if (copyId) {
+          onDone?.(copyId);
+        }
+      })
+      .catch(showError);
+  });
+}
+
+// Long-press menu for a document in any list. onOpen opens a document, used for a new copy.
+export function openDocMenu(doc: Doc, onOpen?: (docId: string) => void) {
   const { updateDoc } = useStore.getState();
   chooseOption(
     [
       { label: 'Share PDF', onPress: () => later(() => shareDoc(doc)) },
       { label: 'Share with Password', onPress: () => later(() => askSharePassword(doc)) },
+      { label: 'Duplicate', onPress: () => later(() => askDuplicate(doc, onOpen)) },
       { label: 'Rename', onPress: () => later(() => askRename(doc)) },
       { label: 'Move', onPress: () => later(() => askMove(doc)) },
       {

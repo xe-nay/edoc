@@ -2,11 +2,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { deletePage, movePage, rotatePage, scanMorePages, setPageFilter } from '../../../src/actions';
-import { BottomBar, bottomBarInset } from '../../../src/components/Bars';
+import { deletePage, movePage, rescanPage, rotatePage, scanMorePages, setPageFilter } from '../../../src/actions';
+import { BottomBar, HeaderBar, bottomBarInset } from '../../../src/components/Bars';
 import type { BarAction } from '../../../src/components/bar-types';
 import { PageImage } from '../../../src/components/PageImage';
-import { confirmDelete, showError, tap } from '../../../src/native-ui';
+import { confirmDelete, showError, success, tap } from '../../../src/native-ui';
 import { useStore } from '../../../src/store';
 import { colors, space, withAlpha } from '../../../src/theme';
 import type { Page, PageFilter } from '../../../src/types';
@@ -71,6 +71,20 @@ export default function PagesScreen() {
     });
   };
 
+  // The new scan takes the selected page's place, keeping the order of the others.
+  const rescan = () => {
+    if (!selected) {
+      return;
+    }
+    work(async () => {
+      const replacement = await rescanPage(doc.id, selected.id);
+      if (replacement) {
+        setSelectedId(replacement);
+        success();
+      }
+    });
+  };
+
   const filterMenu: BarAction[] = filters.map((filter) => ({
     label: filter.label,
     on: (selected?.filter ?? 'none') === filter.value,
@@ -115,6 +129,9 @@ export default function PagesScreen() {
           <ActivityIndicator color={colors.text} />
         </View>
       ) : null}
+      <HeaderBar
+        items={[{ icon: 'plus.viewfinder', label: 'Add Pages', onPress: () => work(() => scanMorePages(doc.id)) }]}
+      />
       <BottomBar
         items={[
           { icon: 'arrow.left', label: 'Move Back', disabled: none || index === 0, onPress: () => move(-1) },
@@ -132,7 +149,7 @@ export default function PagesScreen() {
             onPress: () => selected && work(() => rotatePage(doc.id, selected.id)),
           },
           { icon: 'camera.filters', label: 'Filter', disabled: none, menu: filterMenu },
-          { icon: 'plus.viewfinder', label: 'Add Pages', onPress: () => work(() => scanMorePages(doc.id)) },
+          { icon: 'arrow.triangle.2.circlepath.camera', label: 'Rescan Page', disabled: none, onPress: rescan },
           'space',
           { icon: 'trash', label: 'Delete', destructive: true, disabled: none, onPress: remove },
         ]}

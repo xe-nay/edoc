@@ -36,7 +36,8 @@
         }
       ],
       "@react-native-community/datetimepicker",
-      "expo-font"
+      "expo-font",
+      "./plugins/with-android-size"
     ],
     "android": {
       "package": "app.edoc.documents",

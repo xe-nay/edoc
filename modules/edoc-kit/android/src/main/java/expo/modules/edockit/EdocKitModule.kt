@@ -21,7 +21,10 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
+import com.google.android.gms.common.moduleinstall.ModuleInstall
+import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
@@ -155,25 +158,85 @@ class EdocKitModule : Module() {
     return out.toByteArray()
   }
 
+  // Google's scanner turns pages by itself from the text it detects, and turns pages in some
+  // scripts (Arabic among them) upside down; it offers no way to switch that off. Each page is
+  // read both ways up and kept the way that yields clearly more legible text. When neither way
+  // is clearly better (no readable text), the page is left as the scanner returned it.
+  private fun legibleCharacters(bitmap: Bitmap, rotation: Int, recognizer: TextRecognizer): Int {
+    val text = Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, rotation)))
+    return text.textBlocks.sumOf { block ->
+      block.lines.sumOf { line ->
+        val letters = line.text.count { it.isLetterOrDigit() }
+        if (letters >= 3) letters else 0
+      }
+    }
+  }
+
+  private fun needsHalfTurn(bitmap: Bitmap): Boolean {
+    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    return try {
+      val longest = max(bitmap.width, bitmap.height)
+      val sample = if (longest > 1600) {
+        val ratio = 1600f / longest
+        Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).roundToInt(), (bitmap.height * ratio).roundToInt(), true)
+      } else {
+        bitmap
+      }
+      val asIs = legibleCharacters(sample, 0, recognizer)
+      val turned = legibleCharacters(sample, 180, recognizer)
+      if (sample !== bitmap) {
+        sample.recycle()
+      }
+      turned >= 12 && turned > asIs * 2
+    } catch (error: Exception) {
+      // The recognition model may not be available yet; keep the page as it is.
+      false
+    } finally {
+      recognizer.close()
+    }
+  }
+
+  // Writes a scanned page upright and returns its size.
+  private fun saveUpright(data: ByteArray, file: File): Pair<Int, Int> {
+    val upright = decodeUpright(data, 0)
+    val result = if (needsHalfTurn(upright)) redraw(upright, 2, "none") else upright
+    file.writeBytes(if (result === upright && !hasRotationTag(data)) data else jpeg(result, 90))
+    val size = result.width to result.height
+    if (result !== upright) {
+      result.recycle()
+    }
+    upright.recycle()
+    return size
+  }
+
+  private fun hasRotationTag(data: ByteArray): Boolean = try {
+    ExifInterface(ByteArrayInputStream(data))
+      .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) != ExifInterface.ORIENTATION_NORMAL
+  } catch (error: Exception) {
+    false
+  }
+
   override fun definition() = ModuleDefinition {
     Name("EdocKit")
 
-    // Presents Google's document scanner (edge detection, cropping, filters).
-    // Resolves with one entry per saved page, or an empty list when cancelled.
-    AsyncFunction("scan") { outDir: String, promise: Promise ->
+    // Presents Google's document scanner (edge detection, cropping, filters). maxPages 0 means
+    // no limit. Resolves with one entry per saved page, or an empty list when cancelled.
+    AsyncFunction("scan") { outDir: String, maxPages: Int, promise: Promise ->
       if (pendingScan != null) {
         promise.reject("ERR_SCAN_BUSY", "A scan is already in progress", null)
         return@AsyncFunction
       }
       val activity = appContext.throwingActivity
-      val options = GmsDocumentScannerOptions.Builder()
+      val builder = GmsDocumentScannerOptions.Builder()
         .setGalleryImportAllowed(false)
         .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
         .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
-        .build()
+      if (maxPages > 0) {
+        builder.setPageLimit(maxPages)
+      }
       pendingScan = promise
       pendingScanDir = toFile(outDir)
-      GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
+      GmsDocumentScanning.getClient(builder.build()).getStartScanIntent(activity)
         .addOnSuccessListener { sender ->
           try {
             activity.startIntentSenderForResult(sender, SCAN_REQUEST, null, 0, 0, 0)
@@ -198,25 +261,38 @@ class EdocKitModule : Module() {
         promise.resolve(emptyList<Map<String, Any>>())
         return@OnActivityResult
       }
-      try {
-        val directory = pendingScanDir ?: throw CodedException("ERR_SCAN_SAVE", "Nowhere to save the scan", null)
-        directory.mkdirs()
-        val stamp = System.currentTimeMillis()
-        val result = GmsDocumentScanningResult.fromActivityResultIntent(intent)
-        val pages = result?.pages.orEmpty().mapIndexed { index, page ->
-          val file = File(directory, "scan-$stamp-$index.jpg")
-          val input = context.contentResolver.openInputStream(page.imageUri)
-            ?: throw CodedException("ERR_SCAN_SAVE", "The scanned page cannot be read", null)
-          input.use { source -> file.outputStream().use { source.copyTo(it) } }
-          val (width, height) = imageSize(file)
-          pageInfo(file, width, height)
+      val directory = pendingScanDir
+      val result = GmsDocumentScanningResult.fromActivityResultIntent(intent)
+      // Saving and straightening run off the main thread: text recognition must not block it.
+      Thread {
+        try {
+          directory ?: throw CodedException("ERR_SCAN_SAVE", "Nowhere to save the scan", null)
+          directory.mkdirs()
+          val stamp = System.currentTimeMillis()
+          val pages = result?.pages.orEmpty().mapIndexed { index, page ->
+            val input = context.contentResolver.openInputStream(page.imageUri)
+              ?: throw CodedException("ERR_SCAN_SAVE", "The scanned page cannot be read", null)
+            val data = input.use { it.readBytes() }
+            val file = File(directory, "scan-$stamp-$index.jpg")
+            val (width, height) = saveUpright(data, file)
+            pageInfo(file, width, height)
+          }
+          promise.resolve(pages)
+        } catch (error: Exception) {
+          promise.reject("ERR_SCAN_SAVE", error.message ?: "The scan could not be saved", error)
         }
-        promise.resolve(pages)
-      } catch (error: Exception) {
-        promise.reject("ERR_SCAN_SAVE", error.message ?: "The scan could not be saved", error)
-      }
+      }.start()
     }
 
+    // Asks Google Play services to fetch the text recognition model now, so that the first
+    // recognition does not have to wait for it. Does nothing when it is already there.
+    AsyncFunction("prepareTextRecognition") {
+      val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+      val request = ModuleInstallRequest.newBuilder().addApi(recognizer).build()
+      ModuleInstall.getClient(context).installModules(request)
+        .addOnCompleteListener { recognizer.close() }
+      Unit
+    }
     // App storage on Android is already private to the app and left out of backups by the manifest.
     AsyncFunction("secure") { _: String, _: Boolean -> }
 

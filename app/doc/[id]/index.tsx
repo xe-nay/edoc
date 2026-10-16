@@ -19,7 +19,7 @@ import { BottomBar, HeaderBar } from '../../../src/components/Bars';
 import { Icon } from '../../../src/components/Icon';
 import { PageImage } from '../../../src/components/PageImage';
 import { Zoomable } from '../../../src/components/Zoomable';
-import { askDelete, askMove, askRename, askSharePassword, shareDoc } from '../../../src/doc-menu';
+import { askDelete, askDuplicate, askMove, askRename, askSharePassword, shareDoc } from '../../../src/doc-menu';
 import { showError, success, tap } from '../../../src/native-ui';
 import { useStore } from '../../../src/store';
 import { colors } from '../../../src/theme';
@@ -163,6 +163,11 @@ export default function DocScreen() {
             icon: 'ellipsis',
             label: 'More',
             menu: [
+              {
+                icon: 'doc.on.doc',
+                label: 'Duplicate',
+                onPress: () => askDuplicate(doc, (copyId) => router.replace({ pathname: '/doc/[id]', params: { id: copyId } })),
+              },
               { icon: 'pencil', label: 'Rename', onPress: () => askRename(doc) },
               { icon: 'folder.fill', label: 'Move', onPress: () => askMove(doc) },
               {

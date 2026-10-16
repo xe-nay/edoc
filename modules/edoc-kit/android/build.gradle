@@ -20,7 +20,9 @@ android {
 dependencies {
   // System document scanner (edge detection, cropping, filters), provided by Google Play services.
   implementation 'com.google.android.gms:play-services-mlkit-document-scanner:16.0.0'
-  // Text recognition with the model bundled in the app, so it works with no connection.
-  implementation 'com.google.mlkit:text-recognition:16.0.1'
+  // Text recognition through Google Play services: the model is downloaded once by Play services
+  // (the app itself has no internet access) instead of adding about 11 MB to the app.
+  implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.1'
+  implementation 'com.google.android.gms:play-services-base:18.11.1'
   implementation 'androidx.exifinterface:exifinterface:1.4.2'
 }

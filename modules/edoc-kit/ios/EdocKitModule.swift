@@ -168,8 +168,9 @@ public class EdocKitModule: Module {
     Name("EdocKit")
 
     // Presents the system document scanner (the one used by Notes and Files).
-    // Resolves with one entry per saved page, or an empty array when cancelled.
-    AsyncFunction("scan") { (outDir: String, promise: Promise) in
+    // Resolves with one entry per saved page, or an empty array when cancelled. The system scanner
+    // cannot be limited to a number of pages, so maxPages is applied by the caller.
+    AsyncFunction("scan") { (outDir: String, _: Int, promise: Promise) in
       guard VNDocumentCameraViewController.isSupported else {
         promise.reject("ERR_SCAN_UNSUPPORTED", "Document scanning is not available on this device")
         return

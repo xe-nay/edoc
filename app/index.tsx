@@ -198,7 +198,7 @@ export default function Home() {
                   doc={doc}
                   detail={snippet(doc, text, query)}
                   onPress={() => openDoc(doc.id)}
-                  onLongPress={() => openDocMenu(doc)}
+                  onLongPress={() => openDocMenu(doc, openDoc)}
                 />
               ))}
             </Card>
@@ -214,7 +214,7 @@ export default function Home() {
                   <Text style={styles.alertTitle}>Expiring soon</Text>
                 </View>
                 {urgent.map((doc) => (
-                  <DocRow key={doc.id} doc={doc} onPress={() => openDoc(doc.id)} onLongPress={() => openDocMenu(doc)} />
+                  <DocRow key={doc.id} doc={doc} onPress={() => openDoc(doc.id)} onLongPress={() => openDocMenu(doc, openDoc)} />
                 ))}
               </View>
             ) : null}
@@ -257,7 +257,7 @@ export default function Home() {
                           key={doc.id}
                           doc={doc}
                           onPress={() => openDoc(doc.id)}
-                          onLongPress={() => openDocMenu(doc)}
+                          onLongPress={() => openDocMenu(doc, openDoc)}
                         />
                       ))}
                     </Card>
@@ -278,7 +278,7 @@ export default function Home() {
                           key={doc.id}
                           doc={doc}
                           onPress={() => openDoc(doc.id)}
-                          onLongPress={() => openDocMenu(doc)}
+                          onLongPress={() => openDocMenu(doc, openDoc)}
                         />
                       ))}
                     </Card>
@@ -297,7 +297,7 @@ export default function Home() {
                         key={doc.id}
                         doc={doc}
                         onPress={() => openDoc(doc.id)}
-                        onLongPress={() => openDocMenu(doc)}
+                        onLongPress={() => openDocMenu(doc, openDoc)}
                       />
                     ))}
                     {row.length === 1 ? <View style={{ flex: 1 }} /> : null}

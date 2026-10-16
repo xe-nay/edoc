@@ -24,6 +24,20 @@ export async function importFromPhotos(_target: Target): Promise<string | null> 
   return null;
 }
 
+export async function rescanPage(_docId: string, _pageId: string): Promise<string | null> {
+  return null;
+}
+
+export async function duplicateDoc(docId: string, name: string): Promise<string | null> {
+  const doc = useStore.getState().docs.find((item) => item.id === docId);
+  if (!doc) {
+    return null;
+  }
+  const id = `copy-${Date.now()}`;
+  useStore.getState().addDoc({ ...doc, id, name, createdAt: Date.now(), updatedAt: Date.now() });
+  return id;
+}
+
 export async function sharePdf(_docId: string, _password: string | null = null) {}
 
 export async function rotatePage(_docId: string, _pageId: string) {}

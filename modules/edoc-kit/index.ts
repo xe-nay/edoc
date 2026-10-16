@@ -10,7 +10,10 @@ export type KitFilter = 'none' | 'enhance' | 'gray' | 'bw';
 
 type EdocKitModule = {
   // Opens the system document scanner; resolves with [] when cancelled.
-  scan(outDir: string): Promise<KitPage[]>;
+  // maxPages 0 means no limit; iOS cannot limit its scanner, so callers keep only what they need.
+  scan(outDir: string, maxPages: number): Promise<KitPage[]>;
+  // Android only: has Google Play services fetch the text recognition model ahead of use.
+  prepareTextRecognition?(): Promise<void>;
   // Encrypts the tree while the device is locked and sets whether backups include it.
   secure(uri: string, excludeFromBackup: boolean): Promise<void>;
   // Android only: keeps the app out of screenshots and the recent-apps preview.

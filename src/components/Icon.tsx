@@ -50,6 +50,7 @@ const previewNames: Partial<Record<IconName, string>> = {
   'xmark.circle.fill': 'cancel',
   'square.and.arrow.down': 'download',
   'plus.viewfinder': 'add_a_photo',
+  'arrow.triangle.2.circlepath.camera': 'cameraswitch',
 };
 
 type Props = {

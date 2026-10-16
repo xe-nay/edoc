@@ -60,6 +60,7 @@ export async function secureStorage() {
   if (!EdocKit) {
     return;
   }
+  EdocKit.prepareTextRecognition?.().catch(() => {});
   ensureDirs();
   await EdocKit.secure(rootDir.uri, !useStore.getState().settings.deviceBackup);
 }
@@ -136,7 +137,7 @@ export async function scanDocument(target: Target): Promise<string | null> {
   ensureDirs();
   const scratch = scratchDir();
   try {
-    const pages = await kit().scan(scratch.uri);
+    const pages = await kit().scan(scratch.uri, 0);
     if (pages.length === 0) {
       return null;
     }
@@ -153,7 +154,7 @@ export async function scanMorePages(docId: string): Promise<number> {
   ensureDirs();
   const scratch = scratchDir();
   try {
-    const pages = await kit().scan(scratch.uri);
+    const pages = await kit().scan(scratch.uri, 0);
     // The scanner can stay open for a while; work from the document as it is now.
     const doc = findDoc(docId);
     if (pages.length === 0 || !doc) {
@@ -168,6 +169,74 @@ export async function scanMorePages(docId: string): Promise<number> {
   }
 }
 
+// Scans one new page in place of an existing one, keeping its position in the document.
+// Returns the new page's id, or null when the scan was cancelled.
+export async function rescanPage(docId: string, pageId: string): Promise<string | null> {
+  ensureDirs();
+  const scratch = scratchDir();
+  try {
+    const pages = await kit().scan(scratch.uri, 1);
+    const doc = findDoc(docId);
+    const old = doc?.pages.find((page) => page.id === pageId);
+    if (pages.length === 0 || !doc || !old) {
+      return null;
+    }
+    // The iPhone scanner cannot be limited to one page; only the first is used.
+    const [replacement] = await adoptPages(doc, pages.slice(0, 1));
+    useStore.getState().updateDoc(docId, {
+      pages: doc.pages.map((page) => (page.id === pageId ? replacement : page)),
+    });
+    removePageFile(doc, old.file);
+    removePageFile(doc, old.original);
+    useStore.getState().dropText([pageId]);
+    queueText(docId);
+    return replacement.id;
+  } finally {
+    discard(scratch);
+  }
+}
+
+// Makes an independent copy of a document, with its own pages, under a new name.
+export async function duplicateDoc(docId: string, name: string): Promise<string | null> {
+  const doc = findDoc(docId);
+  if (!doc) {
+    return null;
+  }
+  ensureDirs();
+  const copyId = newId();
+  const copyRef: DocRef = { id: copyId, protected: doc.protected };
+  const directory = docDir(copyId);
+  directory.create({ intermediates: true, idempotent: true });
+  const text = useStore.getState().text;
+  const copiedText: TextIndex = {};
+  const pages: Page[] = [];
+  try {
+    for (const page of doc.pages) {
+      // Page ids are unique across the library, so every copied page gets a new one.
+      const id = newId();
+      for (const fileName of page.original ? [page.file, page.original] : [page.file]) {
+        pageFile(doc, fileName).copySync(pageFile(copyRef, fileName));
+      }
+      pages.push({ ...page, id });
+      if (page.id in text) {
+        copiedText[id] = text[page.id];
+      }
+    }
+  } catch (error) {
+    discard(directory);
+    throw error;
+  }
+  const now = Date.now();
+  const copy: Doc = { ...doc, id: copyId, name: name.trim() || doc.name, pages, createdAt: now, updatedAt: now, reminderIds: [] };
+  useStore.getState().addDoc(copy);
+  for (const [pageId, value] of Object.entries(copiedText)) {
+    useStore.getState().setText(pageId, value);
+  }
+  if (copy.expiresAt !== null) {
+    await setExpiry(copyId, copy.expiresAt);
+  }
+  return copyId;
+}
 // PDFs become one document each; images picked together become one document.
 export async function importFromFiles(target: Target): Promise<string[]> {
   const result = await DocumentPicker.getDocumentAsync({
