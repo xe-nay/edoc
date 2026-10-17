@@ -10,11 +10,13 @@ import org.opencv.core.MatOfInt
 import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
+import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -318,31 +320,63 @@ internal object DocumentDetector {
     return output
   }
 
-  // Divides out the paper's background (estimated on a small copy, which is also much faster)
-  // so that shadows and uneven light disappear, then stretches the result to full contrast.
+  // Evens out the light: the paper's brightness is estimated on a coarse grid (with text taken
+  // out) and divided away, so shadows and colour casts disappear and the paper turns white. The
+  // estimate never drops below about half the paper's white, so large dark areas such as an ID
+  // photo or a stamp are kept rather than washed out. Then ink is darkened to a clean black.
   private fun flatten(channel: Mat): Mat {
     val longest = max(channel.cols(), channel.rows())
-    val scale = if (longest > 1000) 1000.0 / longest else 1.0
+    val scale = 256.0 / longest
     val small = Mat()
     Imgproc.resize(channel, small, Size(), scale, scale, Imgproc.INTER_AREA)
-    val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(7.0, 7.0))
+    val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
     Imgproc.dilate(small, small, kernel)
-    Imgproc.medianBlur(small, small, 21)
-    val background = Mat()
-    Imgproc.resize(small, background, channel.size(), 0.0, 0.0, Imgproc.INTER_LINEAR)
-    small.release()
     kernel.release()
+    val grid = Mat()
+    Imgproc.resize(
+      small, grid,
+      Size(max(1.0, Math.round(small.cols() / 4.0).toDouble()), max(1.0, Math.round(small.rows() / 4.0).toDouble())),
+      0.0, 0.0, Imgproc.INTER_AREA,
+    )
+    small.release()
+    val cells = ByteArray(grid.total().toInt())
+    grid.get(0, 0, cells)
+    val white = percentile(cells.map { (it.toInt() and 0xFF).toFloat() }, 0.95)
+    val light = Mat()
+    grid.convertTo(light, CvType.CV_32F)
+    grid.release()
+    Core.max(light, Scalar(0.55 * white), light)
+    Imgproc.GaussianBlur(light, light, Size(0.0, 0.0), 0.8)
+    val envelope = Mat()
+    Imgproc.resize(light, envelope, channel.size(), 0.0, 0.0, Imgproc.INTER_LINEAR)
+    light.release()
 
-    val difference = Mat()
-    Core.absdiff(channel, background, difference)
-    background.release()
-    val inverted = Mat(difference.size(), CvType.CV_8UC1)
-    Core.bitwise_not(difference, inverted)
-    difference.release()
+    val values = Mat()
+    channel.convertTo(values, CvType.CV_32F)
+    val even = Mat()
+    Core.divide(values, envelope, even, 250.0)
+    values.release()
+    envelope.release()
+
+    val preview = Mat()
+    Imgproc.resize(even, preview, Size(), scale, scale, Imgproc.INTER_AREA)
+    val sample = FloatArray(preview.total().toInt())
+    preview.get(0, 0, sample)
+    preview.release()
+    val low = min(percentile(sample.asList(), 0.01), 80f) * 0.8f
     val result = Mat()
-    Core.normalize(inverted, result, 0.0, 255.0, Core.NORM_MINMAX)
-    inverted.release()
+    val gain = 255.0 / (250.0 - low)
+    even.convertTo(result, CvType.CV_8U, gain, -low * gain)
+    even.release()
     return result
+  }
+
+  private fun percentile(values: List<Float>, share: Double): Float {
+    if (values.isEmpty()) {
+      return 255f
+    }
+    val sorted = values.sorted()
+    return sorted[((sorted.size - 1) * share).toInt()]
   }
 
   private fun odd(value: Int) = if (value % 2 == 0) value + 1 else value

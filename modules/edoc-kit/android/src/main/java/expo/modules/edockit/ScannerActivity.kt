@@ -188,6 +188,9 @@ class ScannerActivity : ComponentActivity() {
 
     outDir = File(intent.getStringExtra(EXTRA_OUT_DIR) ?: cacheDir.path)
     maxPages = intent.getIntExtra(EXTRA_MAX_PAGES, 0)
+    // Photos left behind by a scan that was cut short (the app closed by the system) go first.
+    cacheDir.listFiles { file -> file.isDirectory && file.name.startsWith("edoc-scan-") }
+      ?.forEach { stale -> worker.execute { stale.deleteRecursively() } }
     workDir = File(cacheDir, "edoc-scan-${System.currentTimeMillis()}").apply { mkdirs() }
 
     buildViews()
@@ -590,9 +593,9 @@ class ScannerActivity : ComponentActivity() {
       corners = found
       lastSeen = now
       overlay.show(found, aspect)
-      // After a capture, the next one waits for a new page (or the same page moved).
+      // After a capture, the next one waits for the page to be taken away or clearly moved.
       capturedCorners?.let {
-        if (spread(it, found) > 0.12f) {
+        if (spread(it, found) > 0.25f) {
           armed = true
           capturedCorners = null
         }
