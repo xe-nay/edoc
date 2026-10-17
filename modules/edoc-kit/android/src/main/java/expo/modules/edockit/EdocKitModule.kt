@@ -2,6 +2,7 @@ package expo.modules.edockit
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -39,6 +40,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val SCAN_REQUEST = 4471
+private const val OWN_SCAN_REQUEST = 4472
 private const val JPEG_QUALITY = 82
 
 class EdocKitModule : Module() {
@@ -47,6 +49,32 @@ class EdocKitModule : Module() {
 
   private var pendingScan: Promise? = null
   private var pendingScanDir: File? = null
+  private var pendingMaxPages = 0
+
+  // Google's document scanner, for a device where eDoc's own cannot start. Settles pendingScan.
+  private fun startGoogleScanner(activity: Activity, maxPages: Int) {
+    val promise = pendingScan ?: return
+    val builder = GmsDocumentScannerOptions.Builder()
+      .setGalleryImportAllowed(false)
+      .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
+      .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+    if (maxPages > 0) {
+      builder.setPageLimit(maxPages)
+    }
+    GmsDocumentScanning.getClient(builder.build()).getStartScanIntent(activity)
+      .addOnSuccessListener { sender ->
+        try {
+          activity.startIntentSenderForResult(sender, SCAN_REQUEST, null, 0, 0, 0)
+        } catch (error: Exception) {
+          pendingScan = null
+          promise.reject("ERR_SCAN_FAILED", error.message ?: "The scanner could not be opened", error)
+        }
+      }
+      .addOnFailureListener { error ->
+        pendingScan = null
+        promise.reject("ERR_SCAN_UNAVAILABLE", error.message ?: "The scanner is not available on this phone", error)
+      }
+  }
 
   private fun toFile(value: String): File {
     if (value.startsWith("file:")) {
@@ -247,39 +275,60 @@ class EdocKitModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("EdocKit")
 
-    // Presents Google's document scanner (edge detection, cropping, filters). maxPages 0 means
-    // no limit. Resolves with one entry per saved page, or an empty list when cancelled.
+
+    // Presents eDoc's own scanner (live page outline, automatic capture, crop, clean-up). Google's
+    // document scanner takes over only if eDoc's cannot start on a device. maxPages 0 means no
+    // limit. Resolves with one entry per saved page, or an empty list when cancelled.
     AsyncFunction("scan") { outDir: String, maxPages: Int, promise: Promise ->
       if (pendingScan != null) {
         promise.reject("ERR_SCAN_BUSY", "A scan is already in progress", null)
         return@AsyncFunction
       }
       val activity = appContext.throwingActivity
-      val builder = GmsDocumentScannerOptions.Builder()
-        .setGalleryImportAllowed(false)
-        .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
-        .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
-      if (maxPages > 0) {
-        builder.setPageLimit(maxPages)
-      }
       pendingScan = promise
       pendingScanDir = toFile(outDir)
-      GmsDocumentScanning.getClient(builder.build()).getStartScanIntent(activity)
-        .addOnSuccessListener { sender ->
-          try {
-            activity.startIntentSenderForResult(sender, SCAN_REQUEST, null, 0, 0, 0)
-          } catch (error: Exception) {
-            pendingScan = null
-            promise.reject("ERR_SCAN_FAILED", error.message ?: "The scanner could not be opened", error)
-          }
-        }
-        .addOnFailureListener { error ->
-          pendingScan = null
-          promise.reject("ERR_SCAN_UNAVAILABLE", error.message ?: "The scanner is not available on this phone", error)
-        }
+      pendingMaxPages = maxPages
+      if (!DocumentDetector.load()) {
+        startGoogleScanner(activity, maxPages)
+        return@AsyncFunction
+      }
+      val secure = activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
+      val intent = Intent(activity, ScannerActivity::class.java)
+        .putExtra(ScannerActivity.EXTRA_OUT_DIR, toFile(outDir).path)
+        .putExtra(ScannerActivity.EXTRA_MAX_PAGES, maxPages)
+        .putExtra(ScannerActivity.EXTRA_SECURE, secure)
+      try {
+        activity.startActivityForResult(intent, OWN_SCAN_REQUEST)
+      } catch (error: Exception) {
+        startGoogleScanner(activity, maxPages)
+      }
     }
 
-    OnActivityResult { _, (requestCode, resultCode, intent) ->
+    OnActivityResult { activity, (requestCode, resultCode, intent) ->
+      if (requestCode == OWN_SCAN_REQUEST) {
+        val promise = pendingScan ?: return@OnActivityResult
+        when (resultCode) {
+          Activity.RESULT_OK -> {
+            pendingScan = null
+            val uris = intent?.getStringArrayListExtra(ScannerActivity.RESULT_URIS).orEmpty()
+            val widths = intent?.getIntArrayExtra(ScannerActivity.RESULT_WIDTHS) ?: IntArray(0)
+            val heights = intent?.getIntArrayExtra(ScannerActivity.RESULT_HEIGHTS) ?: IntArray(0)
+            promise.resolve(uris.mapIndexed { index, uri ->
+              mapOf("uri" to uri, "width" to widths.getOrElse(index) { 0 }, "height" to heights.getOrElse(index) { 0 })
+            })
+          }
+          ScannerActivity.RESULT_NO_PERMISSION -> {
+            pendingScan = null
+            promise.reject("ERR_CAMERA_PERMISSION", "Camera access is off for eDoc. Turn it on in Settings.", null)
+          }
+          ScannerActivity.RESULT_NO_CAMERA -> startGoogleScanner(activity, pendingMaxPages)
+          else -> {
+            pendingScan = null
+            promise.resolve(emptyList<Map<String, Any>>())
+          }
+        }
+        return@OnActivityResult
+      }
       if (requestCode != SCAN_REQUEST) {
         return@OnActivityResult
       }

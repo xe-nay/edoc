@@ -14,8 +14,9 @@ const properties = {
   'expo.webp.enabled': 'false',
 };
 
-// The app's own native module is looked up by name, so code shrinking must leave it intact.
-const keepRules = '\n# eDoc native module\n-keep class expo.modules.edockit.** { *; }\n';
+// The app's own native module is looked up by name, and OpenCV's native library reaches into
+// its Java classes by name, so code shrinking must leave both intact.
+const keepRules = '\n# eDoc native module\n-keep class expo.modules.edockit.** { *; }\n-keep class org.opencv.** { *; }\n';
 
 module.exports = function withAndroidSize(config) {
   config = withGradleProperties(config, (mod) => {
@@ -35,7 +36,7 @@ module.exports = function withAndroidSize(config) {
     async (mod) => {
       const file = path.join(mod.modRequest.platformProjectRoot, 'app', 'proguard-rules.pro');
       const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-      if (!current.includes('expo.modules.edockit')) {
+      if (!current.includes('org.opencv')) {
         fs.writeFileSync(file, current + keepRules);
       }
       return mod;
