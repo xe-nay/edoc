@@ -51,6 +51,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
@@ -71,6 +72,8 @@ class ScannerActivity : ComponentActivity() {
     const val EXTRA_OUT_DIR = "edoc.outDir"
     const val EXTRA_MAX_PAGES = "edoc.maxPages"
     const val EXTRA_SECURE = "edoc.secure"
+    // Pages of a scan to show again for review (file URIs), instead of starting at the camera.
+    const val EXTRA_PAGES = "edoc.pages"
     const val RESULT_URIS = "edoc.uris"
     const val RESULT_WIDTHS = "edoc.widths"
     const val RESULT_HEIGHTS = "edoc.heights"
@@ -212,6 +215,12 @@ class ScannerActivity : ComponentActivity() {
       return
     }
     analyzer.execute { PageModel.load(applicationContext) }
+    intent.getStringArrayListExtra(EXTRA_PAGES)?.takeIf { it.isNotEmpty() }?.let { uris ->
+      work({ uris.forEach { uri -> pages.add(existingPage(uri)) } }) {
+        updateCameraBar()
+        showReview(0)
+      }
+    }
     if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
       startCamera()
     } else {
@@ -546,10 +555,20 @@ class ScannerActivity : ComponentActivity() {
         return
       }
       lastAnalysis = now
-      val rgb = colour(image)
+      val full = colour(image)
+      // Google's subject mask from the whole frame (it wants 512 pixels or more), the rest from
+      // a smaller copy.
+      val picture = Bitmap.createBitmap(full.cols(), full.rows(), Bitmap.Config.ARGB_8888)
+      Utils.matToBitmap(full, picture)
+      val subject = Foreground.mask(picture)?.let { DocumentDetector.Mask(it, picture.width, picture.height) }
+      picture.recycle()
+      val scale = ANALYSIS_SIDE.toDouble() / max(full.cols(), full.rows())
+      val rgb = Mat()
+      Imgproc.resize(full, rgb, Size(), scale, scale, Imgproc.INTER_AREA)
+      full.release()
       val gray = Mat()
       Imgproc.cvtColor(rgb, gray, Imgproc.COLOR_RGB2GRAY)
-      val found = DocumentDetector.find(rgb, gray)
+      val found = DocumentDetector.find(rgb, gray, subject)
       val width = gray.cols().toFloat()
       val height = gray.rows().toFloat()
       rgb.release()
@@ -564,7 +583,7 @@ class ScannerActivity : ComponentActivity() {
     }
   }
 
-  // A camera frame in colour, scaled down and turned upright for the screen.
+  // A camera frame in colour, turned upright for the screen.
   private fun colour(image: ImageProxy): Mat {
     val width = image.width
     val height = image.height
@@ -593,19 +612,15 @@ class ScannerActivity : ComponentActivity() {
     val full = Mat()
     Imgproc.cvtColor(yuv, full, Imgproc.COLOR_YUV2RGB_NV21)
     yuv.release()
-    val scale = ANALYSIS_SIDE.toDouble() / max(width, height)
-    val small = Mat()
-    Imgproc.resize(full, small, Size(), scale, scale, Imgproc.INTER_AREA)
-    full.release()
     val code = when (image.imageInfo.rotationDegrees) {
       90 -> Core.ROTATE_90_CLOCKWISE
       180 -> Core.ROTATE_180
       270 -> Core.ROTATE_90_COUNTERCLOCKWISE
-      else -> return small
+      else -> return full
     }
     val upright = Mat()
-    Core.rotate(small, upright, code)
-    small.release()
+    Core.rotate(full, upright, code)
+    full.release()
     return upright
   }
   private fun spread(a: FloatArray, b: FloatArray): Float {
@@ -849,6 +864,27 @@ class ScannerActivity : ComponentActivity() {
     val ratio = 220f / max(clean.width, clean.height)
     page.thumb = Bitmap.createScaledBitmap(clean, max(1, (clean.width * ratio).roundToInt()), max(1, (clean.height * ratio).roundToInt()), true)
     clean.recycle()
+  }
+
+  // A page brought back from an earlier scan: already straightened and cleaned up, so it is
+  // kept as it is unless cropped, turned or restyled.
+  private fun existingPage(uri: String): Page {
+    val source = File(Uri.parse(uri).path ?: uri)
+    val photo = File(workDir, "photo-${System.nanoTime()}.jpg")
+    source.copyTo(photo, overwrite = true)
+    val page = Page(photo, DocumentDetector.fullFrame.copyOf(), DocumentDetector.fullFrame.copyOf())
+    page.style = "original"
+    val output = File(workDir, "page-${System.nanoTime()}.jpg")
+    source.copyTo(output, overwrite = true)
+    page.output = output
+    val shown = decode(output, 220)
+    val ratio = 220f / max(shown.width, shown.height)
+    page.thumb = if (ratio < 1f) {
+      Bitmap.createScaledBitmap(shown, max(1, (shown.width * ratio).roundToInt()), max(1, (shown.height * ratio).roundToInt()), true).also { shown.recycle() }
+    } else {
+      shown
+    }
+    return page
   }
 
   private fun added(page: Page) {

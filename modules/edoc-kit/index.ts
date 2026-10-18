@@ -12,6 +12,9 @@ type EdocKitModule = {
   // Opens the system document scanner; resolves with [] when cancelled.
   // maxPages 0 means no limit; iOS cannot limit its scanner, so callers keep only what they need.
   scan(outDir: string, maxPages: number): Promise<KitPage[]>;
+  // Android only: shows a scan's pages again in the scanner, at its review step. Resolves with
+  // the pages when saved, or [] when the scan is discarded.
+  review?(outDir: string, uris: string[]): Promise<KitPage[]>;
   // Android only: has Google Play services fetch the text recognition model ahead of use.
   prepareTextRecognition?(): Promise<void>;
   // Encrypts the tree while the device is locked and sets whether backups include it.

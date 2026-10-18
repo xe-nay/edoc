@@ -52,6 +52,24 @@ internal object PageModel {
 
     fun toCells(point: Point) = Point((point.x * scale + left) / 4, (point.y * scale + top) / 4)
 
+    // The same reading with another page mask: a mask of the picture (one value from 0 to 1 per
+    // pixel of a maskWidth x maskHeight copy of a picture imageWidth pixels wide) laid on the grid.
+    fun withMask(values: FloatArray, maskWidth: Int, maskHeight: Int, imageWidth: Int): Output {
+      val ratio = maskWidth.toDouble() / imageWidth
+      val grid = FloatArray(CELLS * CELLS) { index ->
+        val point = toImage(Point(index % CELLS + 0.5, index / CELLS + 0.5))
+        val x = (point.x * ratio).roundToInt()
+        val y = (point.y * ratio).roundToInt()
+        if (x !in 0 until maskWidth || y !in 0 until maskHeight) {
+          -10f
+        } else {
+          val p = values[y * maskWidth + x].coerceIn(0.001f, 0.999f)
+          kotlin.math.ln(p / (1 - p))
+        }
+      }
+      return Output(heat, grid, scale, left, top)
+    }
+
     // Share of the grid the page mask covers.
     val coverage: Double
       get() = mask.count { it > 0f }.toDouble() / mask.size

@@ -58,12 +58,12 @@ export default function FolderScreen() {
   const title = isAll ? 'All' : tag ? tagLabels[tag] : (folder?.name ?? '');
   const openDoc = (docId: string) => router.push({ pathname: '/doc/[id]', params: { id: docId } });
 
-  const run = async (task: () => Promise<string | null>) => {
+  const run = async (task: () => Promise<string | null>, scanned = false) => {
     try {
       const docId = await task();
       if (docId) {
         success();
-        nameThenOpen(docId, openDoc);
+        nameThenOpen(docId, openDoc, scanned);
       }
     } catch (error) {
       showError(error);
@@ -155,7 +155,7 @@ export default function FolderScreen() {
             prominent: true,
             onPress: () => {
               tap();
-              run(() => scanDocument(target));
+              run(() => scanDocument(target), true);
             },
           },
         ]}

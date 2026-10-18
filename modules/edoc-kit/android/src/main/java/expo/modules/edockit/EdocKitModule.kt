@@ -304,6 +304,29 @@ class EdocKitModule : Module() {
       }
     }
 
+    // Shows the pages of a scan again in eDoc's scanner, at its review step, to change them or add
+    // more. Resolves with the pages as they are when saved, or an empty list when discarded.
+    AsyncFunction("review") { outDir: String, uris: List<String>, promise: Promise ->
+      if (pendingScan != null) {
+        promise.reject("ERR_SCAN_BUSY", "A scan is already in progress", null)
+        return@AsyncFunction
+      }
+      val activity = appContext.throwingActivity
+      if (!DocumentDetector.load()) {
+        promise.reject("ERR_SCAN_UNAVAILABLE", "The scanner cannot start on this phone", null)
+        return@AsyncFunction
+      }
+      pendingScan = promise
+      pendingScanDir = toFile(outDir)
+      pendingMaxPages = 0
+      val secure = activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
+      val intent = Intent(activity, ScannerActivity::class.java)
+        .putExtra(ScannerActivity.EXTRA_OUT_DIR, toFile(outDir).path)
+        .putExtra(ScannerActivity.EXTRA_SECURE, secure)
+        .putStringArrayListExtra(ScannerActivity.EXTRA_PAGES, ArrayList(uris))
+      activity.startActivityForResult(intent, OWN_SCAN_REQUEST)
+    }
+
     OnActivityResult { activity, (requestCode, resultCode, intent) ->
       if (requestCode == OWN_SCAN_REQUEST) {
         val promise = pendingScan ?: return@OnActivityResult
@@ -361,11 +384,11 @@ class EdocKitModule : Module() {
       }.start()
     }
 
-    // Asks Google Play services to fetch the text recognition model now, so that the first
-    // recognition does not have to wait for it. Does nothing when it is already there.
+    // Asks Google Play services to fetch the text recognition and page finding models now, so that
+    // their first use does not have to wait. Does nothing when they are already there.
     AsyncFunction("prepareTextRecognition") {
       val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-      val request = ModuleInstallRequest.newBuilder().addApi(recognizer).build()
+      val request = ModuleInstallRequest.newBuilder().addApi(recognizer).addApi(Foreground.client()).build()
       ModuleInstall.getClient(context).installModules(request)
         .addOnCompleteListener { recognizer.close() }
       Unit

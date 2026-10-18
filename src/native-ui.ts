@@ -31,14 +31,22 @@ export function promptText(title: string, initial: string, onSubmit: (value: str
 }
 
 // Naming step shown right after a document is added: type a name, or save as-is to keep the
-// suggestion. With onExpiry, a second button saves the name and goes on to the expiry date.
-export function promptName(suggestion: string, onDone: (name: string) => void, onExpiry?: (name: string) => void) {
+// suggestion. With onExpiry, a button saves the name and goes on to the expiry date; with
+// onCancel, a Cancel button goes back (to the scan's pages).
+export function promptName(
+  suggestion: string,
+  onDone: (name: string) => void,
+  onExpiry?: (name: string) => void,
+  onCancel?: () => void,
+) {
   const name = (value: string) => value.trim() || suggestion;
   showDialog({
     kind: 'prompt',
     title: 'Name',
     message: `Leave empty to keep “${suggestion}”.`,
     buttons: [
+      // Not the closing kind of cancel: tapping beside the pop-up does not leave this step.
+      ...(onCancel ? [{ label: 'Cancel', style: 'secondary' as const, onPress: onCancel }] : []),
       ...(onExpiry ? [{ label: 'Set Expiry', style: 'secondary' as const, onPress: (value: string) => onExpiry(name(value)) }] : []),
       { label: 'Save', onPress: (value) => onDone(name(value)) },
     ],

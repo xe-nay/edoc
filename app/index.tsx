@@ -81,12 +81,12 @@ export default function Home() {
   const openDoc = (id: string) => router.push({ pathname: '/doc/[id]', params: { id } });
   const openFolder = (id: string) => router.push({ pathname: '/folder/[id]', params: { id } });
 
-  const add = async (task: () => Promise<string | null>) => {
+  const add = async (task: () => Promise<string | null>, scanned = false) => {
     try {
       const id = await task();
       if (id) {
         success();
-        nameThenOpen(id, openDoc);
+        nameThenOpen(id, openDoc, scanned);
       }
     } catch (error) {
       showError(error);
@@ -95,7 +95,7 @@ export default function Home() {
 
   const scan = () => {
     tap();
-    add(() => scanDocument(target));
+    add(() => scanDocument(target), true);
   };
 
   // Several files imported at once keep their own file names and are not opened.

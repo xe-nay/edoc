@@ -24,6 +24,10 @@ export async function importFromPhotos(_target: Target): Promise<string | null> 
   return null;
 }
 
+export async function reviewScan(_docId: string): Promise<boolean> {
+  return true;
+}
+
 export async function rescanPage(_docId: string, _pageId: string): Promise<string | null> {
   return null;
 }

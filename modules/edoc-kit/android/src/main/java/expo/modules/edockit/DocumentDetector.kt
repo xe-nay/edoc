@@ -46,40 +46,34 @@ internal object DocumentDetector {
   // The whole image, as corner positions from 0 to 1.
   val fullFrame = floatArrayOf(0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f)
 
+  // A mask of the main object in a picture, from Google's subject segmentation: one value from
+  // 0 to 1 per pixel of a width x height copy of the picture.
+  class Mask(val values: FloatArray, val width: Int, val height: Int)
+
   // Corners of the page (top left, top right, bottom right, bottom left) in the pixels of an RGB
   // image and its greyscale copy, or null when there is no page.
   //
-  // The trained model says whether there is a page and roughly where. Its corner peaks, its page
-  // mask's outline, a mix of the two (weak corners taken from the mask) and the rectangle around
-  // the mask each give a rough outline. Every side of each rough outline is then moved onto the
-  // nearest real straight edge running the same way, unless the model sees page beyond that edge
-  // (a rule or table border inside the page). The outline that best matches both the mask and
+  // The trained model reads the picture: its corner peaks and its page mask. Google's subject
+  // mask, when given, is a second opinion on where the page lies. From each mask come rough
+  // outlines: the corner peaks, the mask's outline, a mix of the two (weak corners taken from
+  // the mask) and the rectangle around the mask. Every side of each rough outline is then moved
+  // onto the nearest real straight edge running the same way, unless that mask sees page beyond
+  // the edge (a rule or table border inside the page). The outline that best matches its mask and
   // the photo's edges wins. Without the model, edges alone decide.
-  fun find(rgb: Mat, gray: Mat): Array<Point>? {
+  fun find(rgb: Mat, gray: Mat, subject: Mask? = null): Array<Point>? {
     val model = if (PageModel.ready) PageModel.run(rgb) else null
     if (model == null) {
       return if (PageModel.ready) null else find(gray)
     }
-    if (model.coverage < 0.05) {
+    val readings = listOfNotNull(model, subject?.let { model.withMask(it.values, it.width, it.height, rgb.cols()) })
+      .filter { it.coverage >= 0.05 }
+    if (readings.isEmpty()) {
       return null
     }
     val width = gray.cols()
     val height = gray.rows()
     val diagonal = hypot(width.toDouble(), height.toDouble())
     val longest = max(width, height).toDouble()
-
-    val (peaks, strength) = model.peaks()
-    val rough = ArrayList<Pair<Boolean, Array<Point>>>()
-    rough.add(false to order(peaks))
-    model.maskOutline()?.let { outline ->
-      val maskCorners = order(outline)
-      rough.add(true to maskCorners)
-      val mixed = Array(4) { corner ->
-        if (strength[corner] >= 0.6) peaks[corner] else maskCorners.minByOrNull { distance(it, peaks[corner]) }!!
-      }
-      rough.add(false to order(mixed))
-    }
-    model.maskBox()?.let { rough.add(true to order(it)) }
 
     val map = edgeMap(gray)
     val blurred = Mat()
@@ -91,31 +85,45 @@ internal object DocumentDetector {
 
     var best: Array<Point>? = null
     var bestScore = -1.0
-    for ((fromMask, cells) in rough) {
-      val outline = cells.map { model.toImage(it) }.toTypedArray()
-      if (!convex(outline) || quadArea(outline) < 0.05 * width * height) {
-        continue
+    for (reading in readings) {
+      val (peaks, strength) = reading.peaks()
+      val rough = ArrayList<Pair<Boolean, Array<Point>>>()
+      rough.add(false to order(peaks))
+      reading.maskOutline()?.let { outline ->
+        val maskCorners = order(outline)
+        rough.add(true to maskCorners)
+        val mixed = Array(4) { corner ->
+          if (strength[corner] >= 0.6) peaks[corner] else maskCorners.minByOrNull { distance(it, peaks[corner]) }!!
+        }
+        rough.add(false to order(mixed))
       }
-      // Rough outlines from the mask may be far off; corner peaks are close already.
-      val reach = (if (fromMask) 0.12 else 0.04) * diagonal
-      var corners = snapSides(outline, lines, map, model, reach, 6.0 * longest / 480)
-      if (!convex(corners) || !squareEnough(corners)) {
-        if (!squareEnough(outline)) continue
-        corners = outline
-      }
-      val agreement = model.agreement(corners.map { model.toCells(it) }.toTypedArray())
-      if (agreement < 0.5) {
-        continue
-      }
-      val score = agreement + map.support(corners)
-      if (score > bestScore) {
-        bestScore = score
-        best = corners
+      reading.maskBox()?.let { rough.add(true to order(it)) }
+
+      for ((fromMask, cells) in rough) {
+        val outline = cells.map { reading.toImage(it) }.toTypedArray()
+        if (!convex(outline) || quadArea(outline) < 0.05 * width * height) {
+          continue
+        }
+        // Rough outlines from a mask may be far off; corner peaks are close already.
+        val reach = (if (fromMask) 0.12 else 0.04) * diagonal
+        var corners = snapSides(outline, lines, map, reading, reach, 6.0 * longest / 480)
+        if (!convex(corners) || !squareEnough(corners)) {
+          if (!squareEnough(outline)) continue
+          corners = outline
+        }
+        val agreement = reading.agreement(corners.map { reading.toCells(it) }.toTypedArray())
+        if (agreement < 0.5) {
+          continue
+        }
+        val score = agreement + map.support(corners)
+        if (score > bestScore) {
+          bestScore = score
+          best = corners
+        }
       }
     }
     return best
   }
-
   private fun edgeMap(gray: Mat): EdgeMap {
     val blurred = Mat()
     Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
@@ -370,7 +378,8 @@ internal object DocumentDetector {
     Imgproc.cvtColor(rgba, rgb, Imgproc.COLOR_RGBA2RGB)
     val gray = Mat()
     Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
-    val corners = find(rgb, gray)
+    val subject = Foreground.mask(sample)?.let { Mask(it, sample.width, sample.height) }
+    val corners = find(rgb, gray, subject)
     val width = gray.cols().toFloat()
     val height = gray.rows().toFloat()
     listOf(rgba, rgb, gray).forEach { it.release() }

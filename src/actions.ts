@@ -169,6 +169,51 @@ export async function scanMorePages(docId: string): Promise<number> {
   }
 }
 
+// Back from the naming step of a new scan. On Android the scanner opens again at its review step
+// with the scan's pages, to change them or add more; discarding there throws the whole scan away.
+// The iPhone's scanner cannot reopen with pages in it, so it opens to add pages to the scan.
+// Resolves with false when the scan was thrown away.
+export async function reviewScan(docId: string): Promise<boolean> {
+  const doc = findDoc(docId);
+  if (!doc) {
+    return false;
+  }
+  if (!EdocKit?.review) {
+    await scanMorePages(docId);
+    return true;
+  }
+  ensureDirs();
+  const scratch = scratchDir();
+  try {
+    const uris: string[] = [];
+    for (const [index, page] of doc.pages.entries()) {
+      const copy = new File(scratch, `review-${index}.jpg`);
+      await kit().transcode(pageUri(doc, page.file), copy.uri);
+      uris.push(copy.uri);
+    }
+    const pages = await EdocKit.review(scratch.uri, uris);
+    const current = findDoc(docId);
+    if (!current) {
+      return false;
+    }
+    if (pages.length === 0) {
+      await deleteDoc(docId);
+      return false;
+    }
+    const adopted = await adoptPages(current, pages);
+    for (const page of current.pages) {
+      removePageFile(current, page.file);
+      removePageFile(current, page.original);
+    }
+    useStore.getState().dropText(current.pages.map((page) => page.id));
+    useStore.getState().updateDoc(docId, { pages: adopted });
+    queueText(docId);
+    return true;
+  } finally {
+    discard(scratch);
+  }
+}
+
 // Scans one new page in place of an existing one, keeping its position in the document.
 // Returns the new page's id, or null when the scan was cancelled.
 export async function rescanPage(docId: string, pageId: string): Promise<string | null> {
