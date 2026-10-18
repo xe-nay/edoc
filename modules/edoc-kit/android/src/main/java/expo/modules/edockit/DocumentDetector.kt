@@ -10,7 +10,6 @@ import org.opencv.core.MatOfInt
 import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
-import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.abs
@@ -18,6 +17,7 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.pow
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -533,104 +533,125 @@ internal object DocumentDetector {
 
   private fun distance(a: Point, b: Point) = hypot(a.x - b.x, a.y - b.y)
 
-  // Clean-up styles: "original" keeps the photo; "enhance" removes shadows and evens out the
-  // paper to white while keeping colour; "gray" does the same in greyscale; "bw" is crisp black
-  // on white.
+  // Clean-up styles, like CamScanner's: "original" keeps the photo; "enhance" turns the paper pure
+  // white (no shadows, no wrinkle shading, no colour cast), deepens the ink and keeps coloured ink
+  // such as stamps vivid; "gray" is the same in greyscale; "bw" is black on white.
+  //
+  // The paper's light is measured on a small copy: a local maximum over a few stroke widths
+  // leaves only paper, then a blur at about a sixtieth of the page smooths it while still
+  // following wrinkles. Each pixel is divided by that light, then a tone curve sends the paper to
+  // white and the ink towards black. Large dark areas (a photo) are not mistaken for shadow.
+  // Work happens pixel by pixel on bytes, so a 12 megapixel page needs little memory.
   fun cleanUp(source: Bitmap, style: String): Bitmap {
     if (style == "original") {
       return source.copy(Bitmap.Config.ARGB_8888, false)
     }
+    val width = source.width
+    val height = source.height
     val rgba = Mat()
     Utils.bitmapToMat(source, rgba)
     val rgb = Mat()
     Imgproc.cvtColor(rgba, rgb, Imgproc.COLOR_RGBA2RGB)
     rgba.release()
-    val result = Mat()
-    if (style == "enhance") {
-      val channels = ArrayList<Mat>()
-      Core.split(rgb, channels)
-      val flattened = channels.map { channel -> flatten(channel).also { channel.release() } }
-      Core.merge(flattened, result)
-      flattened.forEach { it.release() }
-    } else {
-      val gray = Mat()
-      Imgproc.cvtColor(rgb, gray, Imgproc.COLOR_RGB2GRAY)
-      val flat = flatten(gray)
-      gray.release()
-      if (style == "bw") {
-        val block = odd(max(15, max(flat.cols(), flat.rows()) / 40))
-        Imgproc.adaptiveThreshold(flat, flat, 255.0, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY, block, 14.0)
-        // Clears isolated specks left by the camera's grain.
-        Imgproc.medianBlur(flat, flat, 3)
-      }
-      Imgproc.cvtColor(flat, result, Imgproc.COLOR_GRAY2RGB)
-      flat.release()
-    }
-    rgb.release()
-    val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
-    Utils.matToBitmap(result, output)
-    result.release()
-    return output
-  }
 
-  // Evens out the light: the paper's brightness is estimated on a coarse grid (with text taken
-  // out) and divided away, so shadows and colour casts disappear and the paper turns white. The
-  // estimate never drops below about half the paper's white, so large dark areas such as an ID
-  // photo or a stamp are kept rather than washed out. Then ink is darkened to a clean black.
-  private fun flatten(channel: Mat): Mat {
-    val longest = max(channel.cols(), channel.rows())
-    val scale = 256.0 / longest
+    // The paper's light, per colour channel, on a copy about 512 pixels on its short side.
+    val scale = min(1.0, 512.0 / min(width, height))
+    val smallWidth = max(1, (width * scale).roundToInt())
+    val smallHeight = max(1, (height * scale).roundToInt())
     val small = Mat()
-    Imgproc.resize(channel, small, Size(), scale, scale, Imgproc.INTER_AREA)
-    val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+    Imgproc.resize(rgb, small, Size(smallWidth.toDouble(), smallHeight.toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
+    val side = min(smallWidth, smallHeight).toDouble()
+    val reach = odd(max(3, (side / 45).roundToInt()))
+    val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(reach.toDouble(), reach.toDouble()))
     Imgproc.dilate(small, small, kernel)
     kernel.release()
-    val grid = Mat()
-    Imgproc.resize(
-      small, grid,
-      Size(max(1.0, Math.round(small.cols() / 4.0).toDouble()), max(1.0, Math.round(small.rows() / 4.0).toDouble())),
-      0.0, 0.0, Imgproc.INTER_AREA,
-    )
+    val floats = Mat()
+    small.convertTo(floats, CvType.CV_32FC3, 1.0 / 255)
     small.release()
-    val cells = ByteArray(grid.total().toInt())
-    grid.get(0, 0, cells)
-    val white = percentile(cells.map { (it.toInt() and 0xFF).toFloat() }, 0.95)
-    val light = Mat()
-    grid.convertTo(light, CvType.CV_32F)
-    grid.release()
-    Core.max(light, Scalar(0.55 * white), light)
-    Imgproc.GaussianBlur(light, light, Size(0.0, 0.0), 0.8)
-    val envelope = Mat()
-    Imgproc.resize(light, envelope, channel.size(), 0.0, 0.0, Imgproc.INTER_LINEAR)
-    light.release()
-
-    val values = Mat()
-    channel.convertTo(values, CvType.CV_32F)
-    val even = Mat()
-    Core.divide(values, envelope, even, 250.0)
-    values.release()
-    envelope.release()
-
-    val preview = Mat()
-    Imgproc.resize(even, preview, Size(), scale, scale, Imgproc.INTER_AREA)
-    val sample = FloatArray(preview.total().toInt())
-    preview.get(0, 0, sample)
-    preview.release()
-    val low = min(percentile(sample.asList(), 0.01), 80f) * 0.8f
-    val result = Mat()
-    val gain = 255.0 / (250.0 - low)
-    even.convertTo(result, CvType.CV_8U, gain, -low * gain)
-    even.release()
-    return result
-  }
-
-  private fun percentile(values: List<Float>, share: Double): Float {
-    if (values.isEmpty()) {
-      return 255f
+    Imgproc.GaussianBlur(floats, floats, Size(0.0, 0.0), side / 60)
+    val light = FloatArray(smallWidth * smallHeight * 3)
+    floats.get(0, 0, light)
+    floats.release()
+    for (channel in 0 until 3) {
+      val values = FloatArray(smallWidth * smallHeight) { light[it * 3 + channel] }
+      values.sort()
+      val floor = 0.5f * values[((values.size - 1) * 0.9).toInt()]
+      for (index in channel until light.size step 3) {
+        if (light[index] < floor) light[index] = floor
+      }
     }
-    val sorted = values.sorted()
-    return sorted[((sorted.size - 1) * share).toInt()]
-  }
 
+    // Tone curves as tables: paper to white, ink deeper; coloured ink deepened gently.
+    val steps = 1024
+    val paperCurve = FloatArray(steps + 1) { (it.toDouble() / steps).pow(1.8).toFloat() }
+    val inkCurve = FloatArray(steps + 1) { (it.toDouble() / steps).pow(2.2).toFloat() }
+
+    val pixels = ByteArray(width * height * 3)
+    rgb.get(0, 0, pixels)
+    val even = FloatArray(3)
+    val out = FloatArray(3)
+    for (y in 0 until height) {
+      val sy = ((y + 0.5) * scale - 0.5).coerceIn(0.0, smallHeight - 1.0)
+      val y0 = sy.toInt()
+      val y1 = min(y0 + 1, smallHeight - 1)
+      val fy = (sy - y0).toFloat()
+      for (x in 0 until width) {
+        val sx = ((x + 0.5) * scale - 0.5).coerceIn(0.0, smallWidth - 1.0)
+        val x0 = sx.toInt()
+        val x1 = min(x0 + 1, smallWidth - 1)
+        val fx = (sx - x0).toFloat()
+        val base = (y * width + x) * 3
+        for (channel in 0 until 3) {
+          val a = light[(y0 * smallWidth + x0) * 3 + channel]
+          val b = light[(y0 * smallWidth + x1) * 3 + channel]
+          val c = light[(y1 * smallWidth + x0) * 3 + channel]
+          val d = light[(y1 * smallWidth + x1) * 3 + channel]
+          val paper = (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy
+          even[channel] = ((pixels[base + channel].toInt() and 0xFF) / 255f) / paper
+        }
+        val luma = (even[0] + even[1] + even[2]) / 3
+        val t = ((luma - 0.35f) / 0.51f).coerceIn(0f, 1f)
+        val gain = paperCurve[(t * steps).toInt()] / max(luma, 1e-3f)
+        val r = even[0].coerceIn(0f, 1f)
+        val g = even[1].coerceIn(0f, 1f)
+        val bl = even[2].coerceIn(0f, 1f)
+        val colour = (((max(r, max(g, bl)) - min(r, min(g, bl))) - 0.06f) / 0.12f).coerceIn(0f, 1f)
+        for (channel in 0 until 3) {
+          val inked = inkCurve[(even[channel].coerceIn(0f, 1f) * steps).toInt()]
+          out[channel] = even[channel] * gain * (1 - colour) + inked * colour
+        }
+        // Colour a little more vivid, coloured ink much more.
+        val mean = (out[0] + out[1] + out[2]) / 3
+        val vivid = 1.25f + 0.6f * colour
+        for (channel in 0 until 3) {
+          val value = mean + (out[channel] - mean) * vivid
+          pixels[base + channel] = (value.coerceIn(0f, 1f) * 255 + 0.5f).toInt().toByte()
+        }
+      }
+    }
+    rgb.put(0, 0, pixels)
+
+    // Light sharpening for crisp text.
+    val soft = Mat()
+    val blurKernel = Mat(3, 3, CvType.CV_32F)
+    blurKernel.put(0, 0, floatArrayOf(1f, 2f, 1f, 2f, 4f, 2f, 1f, 2f, 1f).map { it / 16f }.toFloatArray())
+    Imgproc.filter2D(rgb, soft, -1, blurKernel)
+    Core.addWeighted(rgb, 1.6, soft, -0.6, 0.0, rgb)
+    listOf(soft, blurKernel).forEach { it.release() }
+
+    if (style == "gray" || style == "bw") {
+      val gray = Mat()
+      Imgproc.cvtColor(rgb, gray, Imgproc.COLOR_RGB2GRAY)
+      if (style == "bw") {
+        Imgproc.threshold(gray, gray, 152.0, 255.0, Imgproc.THRESH_BINARY)
+      }
+      Imgproc.cvtColor(gray, rgb, Imgproc.COLOR_GRAY2RGB)
+      gray.release()
+    }
+    val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    Utils.matToBitmap(rgb, output)
+    rgb.release()
+    return output
+  }
   private fun odd(value: Int) = if (value % 2 == 0) value + 1 else value
 }

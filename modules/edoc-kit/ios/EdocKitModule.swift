@@ -1,3 +1,4 @@
+import Accelerate
 import CoreImage
 import ExpoModulesCore
 import PDFKit
@@ -63,42 +64,169 @@ private func redraw(_ image: UIImage, maxDimension: CGFloat, quarterTurns: Int) 
   }
 }
 
-private let sharedCIContext = CIContext(options: nil)
-
+// Clean-up styles, like CamScanner's, the same as on Android: "enhance" turns the paper pure white
+// (no shadows, no wrinkle shading, no colour cast), deepens the ink and keeps coloured ink such as
+// stamps vivid; "gray" is the same in greyscale; "bw" is black on white; anything else keeps the
+// photo.
+//
+// The paper's light is measured on a small copy: a local maximum over a few stroke widths leaves
+// only paper, then a blur at about a sixtieth of the page smooths it while still following
+// wrinkles. Each pixel is divided by that light, then a tone curve sends the paper to white and
+// the ink towards black. Large dark areas (a photo) are not mistaken for shadow.
 private func filtered(_ image: UIImage, filter: String) -> UIImage {
-  var saturation = 1.0
-  var contrast = 1.0
-  var brightness = 0.0
-  switch filter {
-  case "enhance":
-    saturation = 1.15
-    contrast = 1.25
-    brightness = 0.02
-  case "gray":
-    saturation = 0.0
-    contrast = 1.08
-  case "bw":
-    saturation = 0.0
-    contrast = 1.9
-    brightness = 0.08
-  default:
+  guard filter == "enhance" || filter == "gray" || filter == "bw", let source = image.cgImage else {
     return image
   }
-  guard let input = CIImage(image: image), let colorControls = CIFilter(name: "CIColorControls") else {
-    return image
-  }
-  colorControls.setValue(input, forKey: kCIInputImageKey)
-  colorControls.setValue(saturation, forKey: kCIInputSaturationKey)
-  colorControls.setValue(contrast, forKey: kCIInputContrastKey)
-  colorControls.setValue(brightness, forKey: kCIInputBrightnessKey)
-  guard let output = colorControls.outputImage,
-    let cgImage = sharedCIContext.createCGImage(output, from: input.extent)
-  else {
-    return image
-  }
-  return UIImage(cgImage: cgImage, scale: 1, orientation: .up)
-}
+  let width = source.width
+  let height = source.height
+  let space = CGColorSpaceCreateDeviceRGB()
+  let info = CGImageAlphaInfo.noneSkipLast.rawValue
 
+  func pixels(of cg: CGImage, width: Int, height: Int) -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: width * height * 4)
+    bytes.withUnsafeMutableBytes { buffer in
+      if let context = CGContext(
+        data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+        bytesPerRow: width * 4, space: space, bitmapInfo: info)
+      {
+        context.interpolationQuality = .high
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+      }
+    }
+    return bytes
+  }
+
+  // The paper's light, per colour channel, on a copy about 512 pixels on its short side.
+  let scale = min(1.0, 512.0 / Double(min(width, height)))
+  let smallWidth = max(1, Int((Double(width) * scale).rounded()))
+  let smallHeight = max(1, Int((Double(height) * scale).rounded()))
+  let small = pixels(of: source, width: smallWidth, height: smallHeight)
+  let side = Double(min(smallWidth, smallHeight))
+  var reach = max(3, Int((side / 45).rounded()))
+  if reach % 2 == 0 { reach += 1 }
+  // Three box blurs of this width come close to a Gaussian blur of a sixtieth of the side.
+  let sigma = side / 60
+  var box = max(3, Int((4 * sigma * sigma + 1).squareRoot().rounded()))
+  if box % 2 == 0 { box += 1 }
+
+  let count = smallWidth * smallHeight
+  var light = [Float](repeating: 0, count: count * 3)
+  var plane = [UInt8](repeating: 0, count: count)
+  var work = [UInt8](repeating: 0, count: count)
+  for channel in 0..<3 {
+    for index in 0..<count { plane[index] = small[index * 4 + channel] }
+    plane.withUnsafeMutableBytes { planeBytes in
+      work.withUnsafeMutableBytes { workBytes in
+        var a = vImage_Buffer(
+          data: planeBytes.baseAddress, height: vImagePixelCount(smallHeight),
+          width: vImagePixelCount(smallWidth), rowBytes: smallWidth)
+        var b = vImage_Buffer(
+          data: workBytes.baseAddress, height: vImagePixelCount(smallHeight),
+          width: vImagePixelCount(smallWidth), rowBytes: smallWidth)
+        let flags = vImage_Flags(kvImageEdgeExtend)
+        vImageMax_Planar8(&a, &b, nil, 0, 0, vImagePixelCount(reach), vImagePixelCount(reach), flags)
+        vImageBoxConvolve_Planar8(&b, &a, nil, 0, 0, UInt32(box), UInt32(box), 0, flags)
+        vImageBoxConvolve_Planar8(&a, &b, nil, 0, 0, UInt32(box), UInt32(box), 0, flags)
+        vImageBoxConvolve_Planar8(&b, &a, nil, 0, 0, UInt32(box), UInt32(box), 0, flags)
+      }
+    }
+    var values = [Float](repeating: 0, count: count)
+    for index in 0..<count { values[index] = Float(plane[index]) / 255 }
+    let sorted = values.sorted()
+    let floor = 0.5 * sorted[Int(Double(count - 1) * 0.9)]
+    for index in 0..<count { light[index * 3 + channel] = max(values[index], max(floor, 1.0 / 255)) }
+  }
+
+  // Tone curves as tables: paper to white, ink deeper; coloured ink deepened gently.
+  let steps = 1024
+  let paperCurve = (0...steps).map { Float(pow(Double($0) / Double(steps), 1.8)) }
+  let inkCurve = (0...steps).map { Float(pow(Double($0) / Double(steps), 2.2)) }
+
+  var bytes = pixels(of: source, width: width, height: height)
+  var even = [Float](repeating: 0, count: 3)
+  var out = [Float](repeating: 0, count: 3)
+  for y in 0..<height {
+    let sy = min(max((Double(y) + 0.5) * scale - 0.5, 0), Double(smallHeight - 1))
+    let y0 = Int(sy)
+    let y1 = min(y0 + 1, smallHeight - 1)
+    let fy = Float(sy - Double(y0))
+    for x in 0..<width {
+      let sx = min(max((Double(x) + 0.5) * scale - 0.5, 0), Double(smallWidth - 1))
+      let x0 = Int(sx)
+      let x1 = min(x0 + 1, smallWidth - 1)
+      let fx = Float(sx - Double(x0))
+      let base = (y * width + x) * 4
+      for channel in 0..<3 {
+        let a = light[(y0 * smallWidth + x0) * 3 + channel]
+        let b = light[(y0 * smallWidth + x1) * 3 + channel]
+        let c = light[(y1 * smallWidth + x0) * 3 + channel]
+        let d = light[(y1 * smallWidth + x1) * 3 + channel]
+        let top = a + (b - a) * fx
+        let paper = top + ((c + (d - c) * fx) - top) * fy
+        even[channel] = (Float(bytes[base + channel]) / 255) / paper
+      }
+      let luma = (even[0] + even[1] + even[2]) / 3
+      let t = min(max((luma - 0.35) / 0.51, 0), 1)
+      let gain = paperCurve[Int(t * Float(steps))] / max(luma, 1e-3)
+      let r = min(max(even[0], 0), 1)
+      let g = min(max(even[1], 0), 1)
+      let bl = min(max(even[2], 0), 1)
+      let colour = min(max(((max(r, g, bl) - min(r, g, bl)) - 0.06) / 0.12, 0), 1)
+      for channel in 0..<3 {
+        let inked = inkCurve[Int(min(max(even[channel], 0), 1) * Float(steps))]
+        out[channel] = even[channel] * gain * (1 - colour) + inked * colour
+      }
+      // Colour a little more vivid, coloured ink much more.
+      let mean = (out[0] + out[1] + out[2]) / 3
+      let vivid = 1.25 + 0.6 * colour
+      for channel in 0..<3 {
+        let value = mean + (out[channel] - mean) * vivid
+        bytes[base + channel] = UInt8(min(max(value, 0), 1) * 255 + 0.5)
+      }
+    }
+  }
+
+  // Light sharpening for crisp text.
+  var soft = [UInt8](repeating: 0, count: bytes.count)
+  bytes.withUnsafeMutableBytes { sharpBytes in
+    soft.withUnsafeMutableBytes { softBytes in
+      var a = vImage_Buffer(
+        data: sharpBytes.baseAddress, height: vImagePixelCount(height), width: vImagePixelCount(width),
+        rowBytes: width * 4)
+      var b = vImage_Buffer(
+        data: softBytes.baseAddress, height: vImagePixelCount(height), width: vImagePixelCount(width),
+        rowBytes: width * 4)
+      let kernel: [Int16] = [1, 2, 1, 2, 4, 2, 1, 2, 1]
+      vImageConvolve_ARGB8888(&a, &b, nil, 0, 0, kernel, 3, 3, 16, nil, vImage_Flags(kvImageEdgeExtend))
+    }
+  }
+  for index in stride(from: 0, to: bytes.count, by: 4) {
+    var r = 1.6 * Float(bytes[index]) - 0.6 * Float(soft[index])
+    var g = 1.6 * Float(bytes[index + 1]) - 0.6 * Float(soft[index + 1])
+    var b = 1.6 * Float(bytes[index + 2]) - 0.6 * Float(soft[index + 2])
+    if filter != "enhance" {
+      var gray = 0.299 * r + 0.587 * g + 0.114 * b
+      if filter == "bw" { gray = gray >= 152 ? 255 : 0 }
+      r = gray
+      g = gray
+      b = gray
+    }
+    bytes[index] = UInt8(min(max(r, 0), 255))
+    bytes[index + 1] = UInt8(min(max(g, 0), 255))
+    bytes[index + 2] = UInt8(min(max(b, 0), 255))
+    bytes[index + 3] = 255
+  }
+
+  let result: CGImage? = bytes.withUnsafeMutableBytes { buffer in
+    CGContext(
+      data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: space, bitmapInfo: info)?.makeImage()
+  }
+  guard let cleaned = result else {
+    return image
+  }
+  return UIImage(cgImage: cleaned, scale: 1, orientation: .up)
+}
 private final class ScanDelegate: NSObject, VNDocumentCameraViewControllerDelegate {
   private let outDir: URL
   private let promise: Promise

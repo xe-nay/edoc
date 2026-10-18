@@ -420,10 +420,16 @@ class EdocKitModule : Module() {
       }
     }
 
-    // Re-encodes an image as an upright JPEG, optionally resized, rotated and filtered.
+    // Re-encodes an image as an upright JPEG, optionally resized, rotated and filtered. The
+    // clean-up filters (enhance, gray, bw) are the scanner's own, done with OpenCV.
     AsyncFunction("render") { uri: String, outUri: String, quarterTurns: Int, filter: String, maxDimension: Double ->
       val source = decodeUpright(Vault.read(context, toFile(uri)), maxDimension.roundToInt())
-      val result = redraw(source, quarterTurns, filter)
+      val result = if (filter != "none" && DocumentDetector.load()) {
+        val turned = redraw(source, quarterTurns, "none")
+        DocumentDetector.cleanUp(turned, filter).also { turned.recycle() }
+      } else {
+        redraw(source, quarterTurns, filter)
+      }
       val out = toFile(outUri)
       Vault.write(context, jpeg(result, JPEG_QUALITY), out)
       val info = pageInfo(out, result.width, result.height)

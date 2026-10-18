@@ -3,6 +3,7 @@ import { Directory, File, FileMode } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as Notifications from 'expo-notifications';
 import * as Sharing from 'expo-sharing';
+import { Platform } from 'react-native';
 
 import EdocKit, { type KitPage } from '../modules/edoc-kit';
 import { cancelReminders, scheduleReminders } from './reminders';
@@ -133,6 +134,17 @@ function patchPage(docId: string, pageId: string, patch: Partial<Page>) {
 
 // --- Scanning and importing -------------------------------------------------
 
+// The iPhone's scanner hands over its pages as photos; they get the same clean-up as Android's
+// scanner gives (white paper, no shadows). The photo itself stays available as the Original style.
+async function cleanUpScans(docId: string, pageIds: string[]) {
+  if (Platform.OS !== 'ios') {
+    return;
+  }
+  for (const pageId of pageIds) {
+    await setPageFilter(docId, pageId, 'enhance');
+  }
+}
+
 export async function scanDocument(target: Target): Promise<string | null> {
   ensureDirs();
   const scratch = scratchDir();
@@ -141,7 +153,9 @@ export async function scanDocument(target: Target): Promise<string | null> {
     if (pages.length === 0) {
       return null;
     }
-    return await createDoc(defaultName('Scan'), pages, target);
+    const docId = await createDoc(defaultName('Scan'), pages, target);
+    await cleanUpScans(docId, findDoc(docId)?.pages.map((page) => page.id) ?? []);
+    return docId;
   } finally {
     discard(scratch);
   }
@@ -162,6 +176,7 @@ export async function scanMorePages(docId: string): Promise<number> {
     }
     const added = await adoptPages(doc, pages);
     useStore.getState().updateDoc(docId, { pages: [...doc.pages, ...added] });
+    await cleanUpScans(docId, added.map((page) => page.id));
     queueText(docId);
     return added.length;
   } finally {
@@ -234,6 +249,7 @@ export async function rescanPage(docId: string, pageId: string): Promise<string 
     removePageFile(doc, old.file);
     removePageFile(doc, old.original);
     useStore.getState().dropText([pageId]);
+    await cleanUpScans(docId, [replacement.id]);
     queueText(docId);
     return replacement.id;
   } finally {
