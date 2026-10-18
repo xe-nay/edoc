@@ -1,8 +1,6 @@
-import { Alert } from 'react-native';
-
 import { deleteDoc, duplicateDoc, renameDoc, sharePdf } from './actions';
 import { confirmIdentity } from './auth';
-import { chooseOption, confirmDelete, promptSecret, promptText, showError } from './native-ui';
+import { chooseOption, confirmDelete, notify, promptSecret, promptText, showError } from './native-ui';
 import { useStore } from './store';
 import type { Doc } from './types';
 
@@ -23,9 +21,10 @@ export function askMove(doc: Doc) {
   const { folders, updateDoc } = useStore.getState();
   chooseOption(
     [
-      { label: 'No Folder', onPress: () => updateDoc(doc.id, { folderId: null }) },
+      { label: 'No Folder', icon: 'tray.full.fill', onPress: () => updateDoc(doc.id, { folderId: null }) },
       ...folders.map((folder) => ({
         label: folder.name,
+        icon: 'folder.fill' as const,
         onPress: () => updateDoc(doc.id, { folderId: folder.id }),
       })),
     ],
@@ -58,7 +57,7 @@ export async function shareDoc(doc: Doc, password: string | null = null) {
 export function askSharePassword(doc: Doc, share: (password: string) => void = (password) => shareDoc(doc, password)) {
   promptSecret('PDF Password', 'Anyone opening the PDF will need this password.', (password) => {
     if (password.length < MIN_PDF_PASSWORD) {
-      later(() => Alert.alert('Password too short', `Use at least ${MIN_PDF_PASSWORD} characters.`));
+      later(() => notify('Password too short', `Use at least ${MIN_PDF_PASSWORD} characters.`, 'lock.fill'));
       return;
     }
     later(() => share(password));
@@ -83,16 +82,17 @@ export function openDocMenu(doc: Doc, onOpen?: (docId: string) => void) {
   const { updateDoc } = useStore.getState();
   chooseOption(
     [
-      { label: 'Share PDF', onPress: () => later(() => shareDoc(doc)) },
-      { label: 'Share with Password', onPress: () => later(() => askSharePassword(doc)) },
-      { label: 'Duplicate', onPress: () => later(() => askDuplicate(doc, onOpen)) },
-      { label: 'Rename', onPress: () => later(() => askRename(doc)) },
-      { label: 'Move', onPress: () => later(() => askMove(doc)) },
+      { label: 'Share PDF', icon: 'square.and.arrow.up', onPress: () => later(() => shareDoc(doc)) },
+      { label: 'Share with Password', icon: 'lock.fill', onPress: () => later(() => askSharePassword(doc)) },
+      { label: 'Duplicate', icon: 'doc.on.doc', onPress: () => later(() => askDuplicate(doc, onOpen)) },
+      { label: 'Rename', icon: 'pencil', onPress: () => later(() => askRename(doc)) },
+      { label: 'Move', icon: 'folder.fill', onPress: () => later(() => askMove(doc)) },
       {
         label: doc.favorite ? 'Remove from Favorites' : 'Add to Favorites',
+        icon: doc.favorite ? 'star' : 'star.fill',
         onPress: () => updateDoc(doc.id, { favorite: !doc.favorite }),
       },
-      { label: 'Delete', destructive: true, onPress: () => later(() => askDelete(doc)) },
+      { label: 'Delete', icon: 'trash', destructive: true, onPress: () => later(() => askDelete(doc)) },
     ],
     doc.name,
   );

@@ -1,5 +1,5 @@
-import { renameDoc } from './actions';
-import { promptName, showError } from './native-ui';
+import { renameDoc, setExpiry } from './actions';
+import { pickDate, promptName, showError, suggestedExpiry } from './native-ui';
 import { useStore } from './store';
 
 // Every newly added document goes through a naming step before it opens.
@@ -10,9 +10,27 @@ export function nameThenOpen(docId: string, open: (docId: string) => void) {
     return;
   }
   setTimeout(() => {
-    promptName(doc.name, (name) => {
-      renameDoc(docId, name).catch(showError);
-      open(docId);
-    });
+    promptName(
+      doc.name,
+      (name) => {
+        renameDoc(docId, name).catch(showError);
+        open(docId);
+      },
+      // The name is saved first; picking a day saves the expiry date too, and then it opens.
+      (name) => {
+        renameDoc(docId, name).catch(showError);
+        setTimeout(() => {
+          pickDate(
+            'Expiry Date',
+            suggestedExpiry(),
+            (day) => {
+              setExpiry(docId, day.getTime()).catch(showError);
+              open(docId);
+            },
+            () => open(docId),
+          );
+        }, 60);
+      },
+    );
   }, 450);
 }

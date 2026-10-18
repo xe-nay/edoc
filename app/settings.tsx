@@ -1,7 +1,7 @@
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import {
   discardBackup,
@@ -14,7 +14,7 @@ import {
 import { lockName } from '../src/auth';
 import { Icon, type IconName } from '../src/components/Icon';
 import { Glow, SectionLabel } from '../src/components/ui';
-import { chooseOption, deviceName, promptSecret, showError, success } from '../src/native-ui';
+import { chooseOption, confirm, deviceName, notify, promptSecret, showError, success } from '../src/native-ui';
 import { storageBytes } from '../src/storage';
 import { useStore } from '../src/store';
 import { colors, radius, space } from '../src/theme';
@@ -77,7 +77,7 @@ export default function SettingsScreen() {
     }
     try {
       if (next && !(await LocalAuthentication.isEnrolledAsync())) {
-        Alert.alert(`${lockName} is not set up`, 'Set up a screen lock in the Settings app first.');
+        notify(`${lockName} is not set up`, 'Set up a screen lock in the Settings app first.', 'lock.fill');
         return;
       }
       const result = await LocalAuthentication.authenticateAsync({
@@ -131,16 +131,20 @@ export default function SettingsScreen() {
       later(() =>
         chooseOption(
           [
-            { label: 'Add to My Documents', onPress: () => askPassword(picked, 'merge') },
+            { label: 'Add to My Documents', icon: 'square.and.arrow.down', onPress: () => askPassword(picked, 'merge') },
             {
               label: 'Replace Everything',
+              icon: 'arrow.counterclockwise',
               destructive: true,
               onPress: () =>
                 later(() =>
-                  Alert.alert('Replace everything?', 'All documents currently in eDoc are removed first.', [
-                    { text: 'Cancel', style: 'cancel', onPress: () => discardBackup(picked) },
-                    { text: 'Replace', style: 'destructive', onPress: () => askPassword(picked, 'replace') },
-                  ]),
+                  confirm(
+                    'Replace everything?',
+                    'All documents currently in eDoc are removed first.',
+                    'Replace',
+                    () => askPassword(picked, 'replace'),
+                    { destructive: true, onCancel: () => discardBackup(picked) },
+                  ),
                 ),
             },
           ],

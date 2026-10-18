@@ -1,5 +1,15 @@
-import type { ReactNode } from 'react';
-import { Image, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useRef, type ReactNode } from 'react';
+import {
+  Animated,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type PressableProps,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 
 import { daysUntil } from '../store';
 import { colors, radius, space, withAlpha } from '../theme';
@@ -13,6 +23,40 @@ export function Glow({ height = 400 }: { height?: number }) {
     <View pointerEvents="none" style={[styles.glow, { height }]}>
       <Image source={require('../../assets/glow.png')} resizeMode="stretch" style={styles.glowImage} />
     </View>
+  );
+}
+
+// A pressable that dips slightly while held and springs back when let go. style shapes the
+// part that moves; outerStyle places it in its layout.
+export function PressableScale({
+  style,
+  outerStyle,
+  children,
+  scaleTo = 0.97,
+  ...props
+}: Omit<PressableProps, 'style' | 'children'> & {
+  style?: StyleProp<ViewStyle>;
+  outerStyle?: StyleProp<ViewStyle>;
+  scaleTo?: number;
+  children: ReactNode;
+}) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const spring = (toValue: number) =>
+    Animated.spring(scale, { toValue, useNativeDriver: true, speed: 40, bounciness: toValue === 1 ? 5 : 0 }).start();
+  return (
+    <Pressable
+      {...props}
+      style={outerStyle}
+      onPressIn={(event) => {
+        spring(scaleTo);
+        props.onPressIn?.(event);
+      }}
+      onPressOut={(event) => {
+        spring(1);
+        props.onPressOut?.(event);
+      }}>
+      <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>
+    </Pressable>
   );
 }
 
@@ -41,10 +85,10 @@ export function Chip({
   onLongPress?: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} onLongPress={onLongPress} style={[styles.chip, active && styles.chipActive]}>
+    <PressableScale onPress={onPress} onLongPress={onLongPress} scaleTo={0.94} style={[styles.chip, active && styles.chipActive]}>
       {icon ? <Icon name={icon} size={14} color={iconColor ?? (active ? colors.text : colors.textDim)} /> : null}
       <Text style={[styles.chipText, active && { color: colors.text }]}>{label}</Text>
-    </Pressable>
+    </PressableScale>
   );
 }
 

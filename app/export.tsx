@@ -1,12 +1,12 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { exportBackup, MIN_PASSWORD_LENGTH } from '../src/actions';
 import { BottomBar, bottomBarInset } from '../src/components/Bars';
 import { Icon } from '../src/components/Icon';
 import { EmptyState, Glow, pageCount } from '../src/components/ui';
-import { promptSecret, showError, success } from '../src/native-ui';
+import { notify, promptSecret, showError, success } from '../src/native-ui';
 import { useStore } from '../src/store';
 import { colors, radius, space, withAlpha } from '../src/theme';
 import type { Doc } from '../src/types';
@@ -81,7 +81,7 @@ export default function ExportScreen() {
           return;
         }
         if (first.length < MIN_PASSWORD_LENGTH) {
-          later(() => Alert.alert('Password too short', rule));
+          later(() => notify('Password too short', rule, 'lock.fill'));
           return;
         }
         later(() =>
@@ -89,7 +89,7 @@ export default function ExportScreen() {
             if (second === first) {
               later(() => run(first));
             } else {
-              later(() => Alert.alert('Passwords do not match'));
+              later(() => notify('Passwords do not match', undefined, 'lock.fill'));
             }
           }),
         );

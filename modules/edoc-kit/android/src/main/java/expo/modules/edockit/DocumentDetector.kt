@@ -47,25 +47,147 @@ internal object DocumentDetector {
   val fullFrame = floatArrayOf(0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f)
 
   // Corners of the page (top left, top right, bottom right, bottom left) in the pixels of an RGB
-  // image and its greyscale copy, or null when there is no page. The trained model decides
-  // whether there is a page and roughly where; its corners are then snapped to the photo's real
-  // edges when an edge outline lies very close. Without the model, edges alone decide.
+  // image and its greyscale copy, or null when there is no page.
+  //
+  // The trained model says whether there is a page and roughly where. Its corner peaks, its page
+  // mask's outline, a mix of the two (weak corners taken from the mask) and the rectangle around
+  // the mask each give a rough outline. Every side of each rough outline is then moved onto the
+  // nearest real straight edge running the same way, unless the model sees page beyond that edge
+  // (a rule or table border inside the page). The outline that best matches both the mask and
+  // the photo's edges wins. Without the model, edges alone decide.
   fun find(rgb: Mat, gray: Mat): Array<Point>? {
-    if (!PageModel.ready) {
-      return find(gray)
+    val model = if (PageModel.ready) PageModel.run(rgb) else null
+    if (model == null) {
+      return if (PageModel.ready) null else find(gray)
     }
-    val guess = PageModel.find(rgb)?.let { order(it) } ?: return null
-    if (!convex(guess)) {
+    if (model.coverage < 0.05) {
       return null
     }
-    val (found, map) = outlines(gray)
-    val reach = 0.015 * hypot(gray.cols().toDouble(), gray.rows().toDouble())
-    val snapped = found
-      .filter { outline -> (0 until 4).all { distance(outline[it], guess[it]) < reach } }
-      .maxByOrNull { map.support(it) }
-    return if (snapped != null && map.support(snapped) > 0.5) snapped else guess
+    val width = gray.cols()
+    val height = gray.rows()
+    val diagonal = hypot(width.toDouble(), height.toDouble())
+    val longest = max(width, height).toDouble()
+
+    val (peaks, strength) = model.peaks()
+    val rough = ArrayList<Pair<Boolean, Array<Point>>>()
+    rough.add(false to order(peaks))
+    model.maskOutline()?.let { outline ->
+      val maskCorners = order(outline)
+      rough.add(true to maskCorners)
+      val mixed = Array(4) { corner ->
+        if (strength[corner] >= 0.6) peaks[corner] else maskCorners.minByOrNull { distance(it, peaks[corner]) }!!
+      }
+      rough.add(false to order(mixed))
+    }
+    model.maskBox()?.let { rough.add(true to order(it)) }
+
+    val map = edgeMap(gray)
+    val blurred = Mat()
+    Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
+    val edges = Mat()
+    Imgproc.Canny(blurred, edges, 30.0, 90.0)
+    val lines = straightEdges(edges, 0.08 * min(width, height))
+    listOf(blurred, edges).forEach { it.release() }
+
+    var best: Array<Point>? = null
+    var bestScore = -1.0
+    for ((fromMask, cells) in rough) {
+      val outline = cells.map { model.toImage(it) }.toTypedArray()
+      if (!convex(outline) || quadArea(outline) < 0.05 * width * height) {
+        continue
+      }
+      // Rough outlines from the mask may be far off; corner peaks are close already.
+      val reach = (if (fromMask) 0.12 else 0.04) * diagonal
+      var corners = snapSides(outline, lines, map, model, reach, 6.0 * longest / 480)
+      if (!convex(corners) || !squareEnough(corners)) {
+        if (!squareEnough(outline)) continue
+        corners = outline
+      }
+      val agreement = model.agreement(corners.map { model.toCells(it) }.toTypedArray())
+      if (agreement < 0.5) {
+        continue
+      }
+      val score = agreement + map.support(corners)
+      if (score > bestScore) {
+        bestScore = score
+        best = corners
+      }
+    }
+    return best
   }
 
+  private fun edgeMap(gray: Mat): EdgeMap {
+    val blurred = Mat()
+    Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
+    val reference = Mat()
+    Imgproc.Canny(blurred, reference, 20.0, 60.0)
+    val dx = Mat()
+    val dy = Mat()
+    Imgproc.Sobel(blurred, dx, CvType.CV_32F, 1, 0, 3)
+    Imgproc.Sobel(blurred, dy, CvType.CV_32F, 0, 1, 3)
+    val map = EdgeMap(gray.cols(), gray.rows())
+    reference.get(0, 0, map.edges)
+    dx.get(0, 0, map.dx)
+    dy.get(0, 0, map.dy)
+    listOf(blurred, reference, dx, dy).forEach { it.release() }
+    return map
+  }
+
+  // Moves each side of an outline onto the best straight edge near it.
+  private fun snapSides(outline: Array<Point>, lines: List<Line>, map: EdgeMap, model: PageModel.Output, reach: Double, offset: Double): Array<Point> {
+    val centre = Point(outline.sumOf { it.x } / 4, outline.sumOf { it.y } / 4)
+    val chosen = Array(4) { side ->
+      val a = outline[side]
+      val b = outline[(side + 1) % 4]
+      val length = hypot(b.x - a.x, b.y - a.y)
+      var angle = atan2(b.y - a.y, b.x - a.x)
+      if (angle < 0) angle += Math.PI
+      val middle = Point((a.x + b.x) / 2, (a.y + b.y) / 2)
+      val nx = -(b.y - a.y) / max(length, 1e-6)
+      val ny = (b.x - a.x) / max(length, 1e-6)
+      var best = Line(angle, 0.0, length, a.x, a.y, b.x, b.y)
+      var bestScore = map.sideSupport(a, b)
+      for (line in lines) {
+        val turn = abs(line.angle - angle)
+        if (min(turn, Math.PI - turn) > Math.toRadians(15.0)) continue
+        val gap = abs((middle.x - line.x1) * nx + (middle.y - line.y1) * ny)
+        if (gap > reach) continue
+        // The side's own stretch, moved onto this line.
+        val dirX = cos(line.angle)
+        val dirY = sin(line.angle)
+        val t1 = (a.x - line.x1) * dirX + (a.y - line.y1) * dirY
+        val t2 = (b.x - line.x1) * dirX + (b.y - line.y1) * dirY
+        val na = Point(line.x1 + dirX * t1, line.y1 + dirY * t1)
+        val nb = Point(line.x1 + dirX * t2, line.y1 + dirY * t2)
+        if (pageBeyond(model, na, nb, centre, offset)) continue
+        val score = map.sideSupport(na, nb) - 0.4 * gap / reach
+        if (score > bestScore + 0.05) {
+          bestScore = score
+          best = Line(line.angle, 0.0, length, na.x, na.y, nb.x, nb.y)
+        }
+      }
+      best
+    }
+    val corners = Array(4) { corner -> crossing(chosen[(corner + 3) % 4], chosen[corner]) ?: outline[corner] }
+    return order(corners)
+  }
+
+  // True when the model sees page just beyond a side, which makes it a line inside the page.
+  private fun pageBeyond(model: PageModel.Output, a: Point, b: Point, centre: Point, offset: Double): Boolean {
+    val length = max(hypot(b.x - a.x, b.y - a.y), 1e-6)
+    var nx = -(b.y - a.y) / length
+    var ny = (b.x - a.x) / length
+    if (((a.x + b.x) / 2 - centre.x) * nx + ((a.y + b.y) / 2 - centre.y) * ny < 0) {
+      nx = -nx
+      ny = -ny
+    }
+    var sum = 0.0
+    for (step in 0 until 8) {
+      val t = 0.15 + 0.7 * step / 7.0
+      sum += model.pageAt(Point(a.x + (b.x - a.x) * t + nx * offset, a.y + (b.y - a.y) * t + ny * offset))
+    }
+    return sum / 8 >= 0.5
+  }
   // Corners of the page in a greyscale image from its edges alone: the best scoring outline.
   fun find(gray: Mat): Array<Point>? {
     val (found, map) = outlines(gray)
@@ -121,6 +243,9 @@ internal object DocumentDetector {
     val edges = ByteArray(width * height)
     val dx = FloatArray(width * height)
     val dy = FloatArray(width * height)
+
+    // Support of one side on its own.
+    fun sideSupport(a: Point, b: Point) = support(arrayOf(a, b, b, a))
 
     // Share of points along the four sides that sit on an edge running the same way as the side
     // (an edge crossing it, such as a chair arm, does not count).

@@ -16,6 +16,7 @@ const previewNames: Partial<Record<IconName, string>> = {
   gearshape: 'settings',
   plus: 'add',
   'chevron.right': 'chevron_right',
+  'chevron.left': 'chevron_left',
   'lock.fill': 'lock',
   faceid: 'fingerprint',
   'square.and.arrow.up': 'ios_share',

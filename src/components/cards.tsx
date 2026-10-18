@@ -14,7 +14,7 @@ import { pageUri } from '../storage';
 import { colors, radius, withAlpha } from '../theme';
 import type { Doc } from '../types';
 import { Icon, type IconName } from './Icon';
-import { ExpiryPill, formatDate, pageCount, tagIcons } from './ui';
+import { ExpiryPill, PressableScale, formatDate, pageCount, tagIcons } from './ui';
 
 export function Thumb({ doc, style, lockSize = 18 }: { doc: Doc; style?: StyleProp<ViewStyle>; lockSize?: number }) {
   const first = doc.pages[0];
@@ -73,12 +73,13 @@ export function FolderTile({
   // The outer view takes the grid column; padding on a flex child would skew column widths.
   return (
     <View style={[styles.tileCell, dimmed && { opacity: 0.25 }]}>
-      <Pressable
+      <PressableScale
         onPress={onPress}
         onLongPress={onLongPress}
         onPressOut={onPressOut}
         delayLongPress={300}
-        style={({ pressed }) => [styles.tile, pressed && !lifted && styles.pressed, lifted && styles.tileLifted]}>
+        scaleTo={lifted ? 1 : 0.96}
+        style={[styles.tile, lifted && styles.tileLifted]}>
         <LinearGradient
           colors={[withAlpha(color, 0.26), withAlpha(color, 0.04), 'transparent']}
           locations={[0, 0.55, 1]}
@@ -95,7 +96,7 @@ export function FolderTile({
         <Text numberOfLines={1} style={styles.tileName}>
           {name}
         </Text>
-      </Pressable>
+      </PressableScale>
     </View>
   );
 }
@@ -108,7 +109,7 @@ type DocProps = {
 
 export function DocCard({ doc, onPress, onLongPress }: DocProps) {
   return (
-    <Pressable onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.docCard, pressed && styles.pressed]}>
+    <PressableScale onPress={onPress} onLongPress={onLongPress} outerStyle={styles.docCard}>
       <View>
         <Thumb doc={doc} style={styles.docCardThumb} lockSize={34} />
         <View style={styles.badges}>
@@ -135,7 +136,7 @@ export function DocCard({ doc, onPress, onLongPress }: DocProps) {
       <Text style={styles.docMeta}>
         {pageCount(doc.pages.length)} · {formatDate(doc.updatedAt)}
       </Text>
-    </Pressable>
+    </PressableScale>
   );
 }
 

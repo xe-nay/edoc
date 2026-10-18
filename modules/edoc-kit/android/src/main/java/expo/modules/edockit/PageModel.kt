@@ -4,7 +4,9 @@ import android.content.Context
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfByte
+import org.opencv.core.MatOfInt
 import org.opencv.core.MatOfPoint
+import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
 import org.opencv.core.Scalar
 import org.opencv.core.Size
@@ -12,15 +14,18 @@ import org.opencv.dnn.Dnn
 import org.opencv.dnn.Net
 import org.opencv.imgproc.Imgproc
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 // The trained page finder: DocQuadNet-256 from the MakeACopy project (Apache License 2.0),
 // converted by scripts/convert-page-model.py and run with OpenCV's dnn module, on the phone.
-// It sees the photo at 256 x 256 and gives a heat map per corner plus a mask of the page.
+// It sees the photo at 256 x 256 and gives a heat map per corner plus a mask of the page, both
+// on a 64 x 64 grid of cells.
 internal object PageModel {
   private const val SIDE = 256
-  private const val CELLS = 64
+  const val CELLS = 64
   private var net: Net? = null
   private var failed = false
 
@@ -41,11 +46,146 @@ internal object PageModel {
   val ready: Boolean
     @Synchronized get() = net != null
 
-  // Corners of the page (top left, top right, bottom right, bottom left) in the pixels of an RGB
-  // image, or null when the model sees no page: its page mask must cover part of the picture and
-  // agree with the corners it found.
+  // What the model saw in one picture, and how its grid of cells maps onto the picture.
+  class Output(private val heat: FloatArray, private val mask: FloatArray, private val scale: Double, private val left: Int, private val top: Int) {
+    fun toImage(cell: Point) = Point((cell.x * 4 - left) / scale, (cell.y * 4 - top) / scale)
+
+    fun toCells(point: Point) = Point((point.x * scale + left) / 4, (point.y * scale + top) / 4)
+
+    // Share of the grid the page mask covers.
+    val coverage: Double
+      get() = mask.count { it > 0f }.toDouble() / mask.size
+
+    // How sure the model is that the picture point is on the page (0 to 1).
+    fun pageAt(point: Point): Double {
+      val cell = toCells(point)
+      val x = (cell.x - 0.5).coerceIn(0.0, CELLS - 1.0)
+      val y = (cell.y - 0.5).coerceIn(0.0, CELLS - 1.0)
+      val x0 = floor(x).toInt()
+      val y0 = floor(y).toInt()
+      val x1 = min(x0 + 1, CELLS - 1)
+      val y1 = min(y0 + 1, CELLS - 1)
+      val fx = x - x0
+      val fy = y - y0
+      fun at(cx: Int, cy: Int) = 1.0 / (1.0 + exp(-mask[cy * CELLS + cx].toDouble()))
+      return (at(x0, y0) * (1 - fx) + at(x1, y0) * fx) * (1 - fy) + (at(x0, y1) * (1 - fx) + at(x1, y1) * fx) * fy
+    }
+
+    // The four corner peaks in cells (in the model's order: top left, top right, bottom right,
+    // bottom left), each refined within its neighbouring cells, with how strong each peak is.
+    fun peaks(): Pair<Array<Point>, DoubleArray> {
+      val strength = DoubleArray(4)
+      val points = Array(4) { corner ->
+        val base = corner * CELLS * CELLS
+        var best = base
+        for (index in base until base + CELLS * CELLS) {
+          if (heat[index] > heat[best]) best = index
+        }
+        strength[corner] = 1.0 / (1.0 + exp(-heat[best].toDouble()))
+        val peakX = (best - base) % CELLS
+        val peakY = (best - base) / CELLS
+        var weight = 0.0
+        var sumX = 0.0
+        var sumY = 0.0
+        for (y in max(0, peakY - 1)..min(CELLS - 1, peakY + 1)) {
+          for (x in max(0, peakX - 1)..min(CELLS - 1, peakX + 1)) {
+            val w = exp((heat[base + y * CELLS + x] - heat[best]).toDouble())
+            weight += w
+            sumX += w * x
+            sumY += w * y
+          }
+        }
+        Point(sumX / weight + 0.5, sumY / weight + 0.5)
+      }
+      return points to strength
+    }
+
+    // How well an outline (in cells) matches the page mask: shared over combined area.
+    fun agreement(cells: Array<Point>): Double {
+      val outline = Mat.zeros(CELLS, CELLS, CvType.CV_8UC1)
+      val polygon = MatOfPoint(*cells.map { Point(it.x.roundToInt().toDouble(), it.y.roundToInt().toDouble()) }.toTypedArray())
+      Imgproc.fillPoly(outline, listOf(polygon), Scalar(1.0))
+      val inside = ByteArray(CELLS * CELLS)
+      outline.get(0, 0, inside)
+      outline.release()
+      polygon.release()
+      var both = 0
+      var either = 0
+      for (index in mask.indices) {
+        val page = mask[index] > 0f
+        val outlined = inside[index].toInt() != 0
+        if (page && outlined) both++
+        if (page || outlined) either++
+      }
+      return if (either > 0) both.toDouble() / either else 0.0
+    }
+
+    // The largest region of the page mask, at four times the grid's detail.
+    private fun maskRegion(): MatOfPoint? {
+      val grid = Mat(CELLS, CELLS, CvType.CV_32FC1)
+      grid.put(0, 0, mask)
+      val large = Mat()
+      Imgproc.resize(grid, large, Size(SIDE.toDouble(), SIDE.toDouble()), 0.0, 0.0, Imgproc.INTER_LINEAR)
+      val binary = Mat()
+      Imgproc.threshold(large, binary, 0.0, 255.0, Imgproc.THRESH_BINARY)
+      binary.convertTo(binary, CvType.CV_8UC1)
+      val contours = ArrayList<MatOfPoint>()
+      val hierarchy = Mat()
+      Imgproc.findContours(binary, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+      listOf(grid, large, binary, hierarchy).forEach { it.release() }
+      val largest = contours.maxByOrNull { Imgproc.contourArea(it) }
+      contours.filter { it !== largest }.forEach { it.release() }
+      return largest
+    }
+
+    // The page mask's outline reduced to four corners, in cells.
+    fun maskOutline(): Array<Point>? {
+      val region = maskRegion() ?: return null
+      val indices = MatOfInt()
+      Imgproc.convexHull(region, indices)
+      val points = region.toArray()
+      val hull = MatOfPoint2f(*indices.toArray().map { points[it] }.toTypedArray())
+      indices.release()
+      region.release()
+      val perimeter = Imgproc.arcLength(hull, true)
+      val approx = MatOfPoint2f()
+      var result: Array<Point>? = null
+      for (epsilon in doubleArrayOf(0.02, 0.03, 0.045, 0.06, 0.08)) {
+        Imgproc.approxPolyDP(hull, approx, epsilon * perimeter, true)
+        if (approx.rows() == 4) {
+          result = approx.toArray().map { Point(it.x / 4, it.y / 4) }.toTypedArray()
+          break
+        }
+      }
+      if (result == null) {
+        val box = Mat()
+        Imgproc.boxPoints(Imgproc.minAreaRect(hull), box)
+        result = Array(4) { Point(box.get(it, 0)[0] / 4, box.get(it, 1)[0] / 4) }
+        box.release()
+      }
+      hull.release()
+      approx.release()
+      return result
+    }
+
+    // The smallest rotated rectangle around the page mask, in cells: square corners even where
+    // the mask is ragged.
+    fun maskBox(): Array<Point>? {
+      val region = maskRegion() ?: return null
+      val points = MatOfPoint2f(*region.toArray())
+      region.release()
+      val box = Mat()
+      Imgproc.boxPoints(Imgproc.minAreaRect(points), box)
+      val result = Array(4) { Point(box.get(it, 0)[0] / 4, box.get(it, 1)[0] / 4) }
+      points.release()
+      box.release()
+      return result
+    }
+  }
+
+  // Runs the model on an RGB picture of any size.
   @Synchronized
-  fun find(rgb: Mat): Array<Point>? {
+  fun run(rgb: Mat): Output? {
     val model = net ?: return null
     val width = rgb.cols()
     val height = rgb.rows()
@@ -55,7 +195,7 @@ internal object PageModel {
     val left = (SIDE - fitWidth) / 2
     val top = (SIDE - fitHeight) / 2
 
-    // The photo fitted on a black square, as the model was trained.
+    // The picture fitted on a black square, as the model was trained.
     val canvas = Mat.zeros(SIDE, SIDE, CvType.CV_8UC3)
     val fitted = Mat()
     Imgproc.resize(rgb, fitted, Size(fitWidth.toDouble(), fitHeight.toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
@@ -73,53 +213,6 @@ internal object PageModel {
     outputs[0].reshape(1, 1).get(0, 0, heat)
     outputs[1].reshape(1, 1).get(0, 0, mask)
     outputs.forEach { it.release() }
-
-    // Each corner at its heat map's peak, refined within the neighbouring cells.
-    val cells = Array(4) { corner ->
-      val base = corner * CELLS * CELLS
-      var best = base
-      for (index in base until base + CELLS * CELLS) {
-        if (heat[index] > heat[best]) best = index
-      }
-      val peakX = (best - base) % CELLS
-      val peakY = (best - base) / CELLS
-      var weight = 0.0
-      var sumX = 0.0
-      var sumY = 0.0
-      for (y in max(0, peakY - 1)..minOf(CELLS - 1, peakY + 1)) {
-        for (x in max(0, peakX - 1)..minOf(CELLS - 1, peakX + 1)) {
-          val w = exp((heat[base + y * CELLS + x] - heat[best]).toDouble())
-          weight += w
-          sumX += w * x
-          sumY += w * y
-        }
-      }
-      Point(sumX / weight + 0.5, sumY / weight + 0.5)
-    }
-
-    // Does the page mask agree with the corners?
-    val outline = Mat.zeros(CELLS, CELLS, CvType.CV_8UC1)
-    val polygon = MatOfPoint(*cells.map { Point(it.x.roundToInt().toDouble(), it.y.roundToInt().toDouble()) }.toTypedArray())
-    Imgproc.fillPoly(outline, listOf(polygon), Scalar(1.0))
-    val inside = ByteArray(CELLS * CELLS)
-    outline.get(0, 0, inside)
-    listOf(outline, polygon).forEach { it.release() }
-    var both = 0
-    var either = 0
-    var covered = 0
-    for (index in mask.indices) {
-      val page = mask[index] > 0f
-      val outlined = inside[index].toInt() != 0
-      if (page) covered++
-      if (page && outlined) both++
-      if (page || outlined) either++
-    }
-    val agreement = if (either > 0) both.toDouble() / either else 0.0
-    if (agreement < 0.5 || covered < 0.05 * mask.size) {
-      return null
-    }
-    return Array(4) { corner ->
-      Point((cells[corner].x * 4 - left) / scale, (cells[corner].y * 4 - top) / scale)
-    }
+    return Output(heat, mask, scale, left, top)
   }
 }

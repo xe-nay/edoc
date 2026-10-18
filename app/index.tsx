@@ -117,15 +117,17 @@ export default function Home() {
       [
         {
           label: 'Rename',
+          icon: 'pencil',
           onPress: () =>
             setTimeout(
               () => promptText('Rename', folder.name, (name) => useStore.getState().updateFolder(folder.id, { name })),
               350,
             ),
         },
-        { label: 'Color', onPress: () => router.push({ pathname: '/folder-color', params: { id: folder.id } }) },
+        { label: 'Color', icon: 'camera.filters', onPress: () => router.push({ pathname: '/folder-color', params: { id: folder.id } }) },
         {
           label: 'Delete',
+          icon: 'trash',
           destructive: true,
           onPress: () =>
             setTimeout(

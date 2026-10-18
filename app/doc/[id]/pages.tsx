@@ -1,12 +1,12 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 import { deletePage, movePage, rescanPage, rotatePage, scanMorePages, setPageFilter } from '../../../src/actions';
 import { useColumns } from '../../../src/columns';
 import { BottomBar, HeaderBar, bottomBarInset } from '../../../src/components/Bars';
 import type { BarAction } from '../../../src/components/bar-types';
-import { PageImage } from '../../../src/components/PageImage';
+import { PageGrid } from '../../../src/components/PageGrid';
 import { confirmDelete, showError, success, tap } from '../../../src/native-ui';
 import { useStore } from '../../../src/store';
 import { colors, space, withAlpha } from '../../../src/theme';
@@ -31,6 +31,7 @@ export default function PagesScreen() {
     () => doc?.pages[Number(params.page ?? 0)]?.id ?? doc?.pages[0]?.id ?? null,
   );
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const columns = useColumns(PHONE_COLUMNS, CELL_WIDTH);
 
   if (!doc) {
@@ -99,37 +100,22 @@ export default function PagesScreen() {
     },
   }));
 
-  // Pad the last row so every cell keeps the same width.
-  const cells: (Page | null)[] = [...doc.pages];
-  while (cells.length % columns !== 0) {
-    cells.push(null);
-  }
-
   return (
     <>
-      <FlatList
-        data={cells}
-        keyExtractor={(item, cellIndex) => (item ? item.id + item.file : `empty-${cellIndex}`)}
-        key={columns}
-        numColumns={columns}
+      <ScrollView
         contentInsetAdjustmentBehavior="automatic"
-        columnWrapperStyle={styles.columns}
+        scrollEnabled={!dragging}
         contentContainerStyle={styles.content}
-        style={styles.fill}
-        renderItem={({ item, index: cellIndex }) =>
-          item ? (
-            <Pressable style={styles.cell} onPress={() => setSelectedId(item.id)}>
-              <View style={[styles.frame, item.id === selectedId && styles.frameSelected]}>
-                <PageImage doc={doc} page={item} maxDimension={520} contentFit="cover" style={styles.image} />
-              </View>
-              <Text style={[styles.number, item.id === selectedId && { color: colors.text }]}>{cellIndex + 1}</Text>
-            </Pressable>
-          ) : (
-            <View style={styles.cell} />
-          )
-        }
-      />
-      {busy ? (
+        style={styles.fill}>
+        <PageGrid
+          doc={doc}
+          columns={columns}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          onMove={(from, to) => movePage(doc.id, from, to)}
+          onDragChange={setDragging}
+        />
+      </ScrollView>      {busy ? (
         <View pointerEvents="none" style={styles.busy}>
           <ActivityIndicator color={colors.text} />
         </View>
@@ -172,37 +158,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     paddingTop: space.md,
     paddingBottom: 40 + bottomBarInset,
-  },
-  columns: {
-    gap: 12,
-    marginBottom: 14,
-  },
-  cell: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  frame: {
-    width: '100%',
-    aspectRatio: 0.74,
-    borderRadius: 12,
-    borderCurve: 'continuous',
-    overflow: 'hidden',
-    backgroundColor: colors.paper,
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  frameSelected: {
-    borderColor: colors.accent,
-  },
-  image: {
-    flex: 1,
-  },
-  number: {
-    color: colors.textFaint,
-    fontSize: 12.5,
-    fontWeight: '600',
-    marginTop: 6,
-    fontVariant: ['tabular-nums'],
   },
   busy: {
     position: 'absolute',
