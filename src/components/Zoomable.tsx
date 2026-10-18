@@ -6,6 +6,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  View,
   type GestureResponderEvent,
 } from 'react-native';
 
@@ -29,16 +30,27 @@ function spread(event: GestureResponderEvent) {
   return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
 }
 
+function midpoint(event: GestureResponderEvent) {
+  const [a, b] = event.nativeEvent.touches;
+  return { x: (a.pageX + b.pageX) / 2, y: (a.pageY + b.pageY) / 2 };
+}
+
 // One page of the viewer with pinch, double-tap and drag. iOS uses the system scroll view's
 // zoom; elsewhere the gestures are handled here.
 export function Zoomable({ width, height, top, bottom, children, onZoomChange }: Props) {
   const scale = useRef(new Animated.Value(1)).current;
   const x = useRef(new Animated.Value(0)).current;
   const y = useRef(new Animated.Value(0)).current;
+  const frame = useRef<View>(null);
   const state = useRef({
     scale: 1,
     x: 0,
     y: 0,
+    // The page's centre on screen, and the point of the page held under the fingers.
+    centreX: 0,
+    centreY: 0,
+    anchorX: 0,
+    anchorY: 0,
     startScale: 1,
     startX: 0,
     startY: 0,
@@ -67,15 +79,41 @@ export function Zoomable({ width, height, top, bottom, children, onZoomChange }:
       }
     };
 
-    const tap = () => {
+    const locate = () => {
+      frame.current?.measureInWindow((left, topEdge, measuredWidth, measuredHeight) => {
+        state.centreX = left + measuredWidth / 2;
+        state.centreY = topEdge + measuredHeight / 2;
+      });
+    };
+
+    // Remembers which point of the page is under the screen point (x, y), so it can stay there.
+    const hold = (pointX: number, pointY: number) => {
+      state.anchorX = (pointX - state.centreX - state.x) / state.scale;
+      state.anchorY = (pointY - state.centreY - state.y) / state.scale;
+    };
+
+    // A double tap zooms in on the tapped spot, or back out.
+    const tap = (event?: GestureResponderEvent) => {
       const now = Date.now();
       if (now - state.lastTap < DOUBLE_TAP_MS) {
         state.lastTap = 0;
         const zoomIn = state.scale <= 1.01;
-        move(zoomIn ? DOUBLE_TAP_SCALE : 1, 0, 0, true);
+        if (zoomIn && event) {
+          const { pageX, pageY } = event.nativeEvent;
+          hold(pageX, pageY);
+          move(
+            DOUBLE_TAP_SCALE,
+            pageX - state.centreX - DOUBLE_TAP_SCALE * state.anchorX,
+            pageY - state.centreY - DOUBLE_TAP_SCALE * state.anchorY,
+            true,
+          );
+        } else {
+          move(zoomIn ? DOUBLE_TAP_SCALE : 1, 0, 0, true);
+        }
         onZoomChange?.(zoomIn);
       } else {
         state.lastTap = now;
+        locate();
       }
     };
 
@@ -84,29 +122,42 @@ export function Zoomable({ width, height, top, bottom, children, onZoomChange }:
       onMoveShouldSetPanResponder: (event) => event.nativeEvent.touches.length >= 2 || state.scale > 1.01,
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (event) => {
+        locate();
         state.startScale = state.scale;
         state.startX = state.x;
         state.startY = state.y;
-        state.startSpread = event.nativeEvent.touches.length >= 2 ? spread(event) : 0;
+        state.startSpread = 0;
+        if (event.nativeEvent.touches.length >= 2) {
+          state.startSpread = spread(event);
+          const centre = midpoint(event);
+          hold(centre.x, centre.y);
+        }
         state.pinched = false;
       },
       onPanResponderMove: (event, gesture) => {
         if (event.nativeEvent.touches.length >= 2) {
+          // The page grows around the point between the fingers, and follows them as they move.
           const distance = spread(event);
+          const centre = midpoint(event);
           if (!state.startSpread) {
             state.startSpread = distance;
             state.startScale = state.scale;
+            hold(centre.x, centre.y);
           }
           state.pinched = true;
           const next = Math.max(1, Math.min(MAX_SCALE, (state.startScale * distance) / state.startSpread));
-          move(next, state.x, state.y);
+          move(
+            next,
+            centre.x - state.centreX - next * state.anchorX,
+            centre.y - state.centreY - next * state.anchorY,
+          );
         } else if (!state.pinched && state.scale > 1.01) {
           move(state.scale, state.startX + gesture.dx, state.startY + gesture.dy);
         }
       },
-      onPanResponderRelease: (_, gesture) => {
+      onPanResponderRelease: (event, gesture) => {
         if (!state.pinched && Math.abs(gesture.dx) < 6 && Math.abs(gesture.dy) < 6) {
-          tap();
+          tap(event);
           return;
         }
         if (state.scale <= 1.05) {
@@ -115,7 +166,7 @@ export function Zoomable({ width, height, top, bottom, children, onZoomChange }:
         onZoomChange?.(state.scale > 1.05);
       },
     });
-    return { pan, tap };
+    return { pan, tap, locate };
   }, [width, height, onZoomChange, scale, x, y, state]);
 
   if (Platform.OS === 'ios') {
@@ -137,13 +188,15 @@ export function Zoomable({ width, height, top, bottom, children, onZoomChange }:
 
   return (
     <Animated.View
+      ref={frame}
+      onLayout={responder.locate}
       {...responder.pan.panHandlers}
       style={[
         styles.center,
         { width, height, paddingTop: top, paddingBottom: bottom },
         { transform: [{ translateX: x }, { translateY: y }, { scale }] },
       ]}>
-      <Pressable onPress={responder.tap}>{children}</Pressable>
+      <Pressable onPress={(event) => responder.tap(event)}>{children}</Pressable>
     </Animated.View>
   );
 }

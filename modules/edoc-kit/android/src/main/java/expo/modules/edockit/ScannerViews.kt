@@ -9,6 +9,9 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.view.GestureDetector
+import android.view.ScaleGestureDetector
+import android.widget.ImageView
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.hypot
@@ -324,5 +327,127 @@ internal class CropView(context: Context) : View(context) {
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     invalidate()
+  }
+}
+
+// A page picture that can be pinched to zoom (around the fingers), dragged while zoomed and
+// double-tapped to zoom in or back out. A sideways swipe while not zoomed turns the page.
+@SuppressLint("ClickableViewAccessibility")
+internal class ZoomImageView(context: Context) : ImageView(context) {
+  private val fit = Matrix()
+  private val zoom = Matrix()
+  private val shown = Matrix()
+  private val bounds = RectF()
+  private var scale = 1f
+  val zoomed: Boolean
+    get() = scale > 1.01f
+
+  // -1 for the previous page, +1 for the next one.
+  var onSwipe: ((Int) -> Unit)? = null
+
+  init {
+    scaleType = ScaleType.MATRIX
+  }
+
+  override fun setImageBitmap(bitmap: Bitmap?) {
+    super.setImageBitmap(bitmap)
+    reset()
+  }
+
+  fun reset() {
+    scale = 1f
+    zoom.reset()
+    layoutPicture()
+  }
+
+  private fun layoutPicture() {
+    val picture = drawable ?: return
+    if (width == 0 || height == 0) return
+    fit.setRectToRect(
+      RectF(0f, 0f, picture.intrinsicWidth.toFloat(), picture.intrinsicHeight.toFloat()),
+      RectF(0f, 0f, width.toFloat(), height.toFloat()),
+      Matrix.ScaleToFit.CENTER,
+    )
+    update()
+  }
+
+  // Keeps the zoomed picture covering the view (or centred where it is smaller).
+  private fun update() {
+    val picture = drawable ?: return
+    shown.set(fit)
+    shown.postConcat(zoom)
+    bounds.set(0f, 0f, picture.intrinsicWidth.toFloat(), picture.intrinsicHeight.toFloat())
+    shown.mapRect(bounds)
+    val dx = when {
+      bounds.width() <= width -> width / 2f - bounds.centerX()
+      bounds.left > 0 -> -bounds.left
+      bounds.right < width -> width - bounds.right
+      else -> 0f
+    }
+    val dy = when {
+      bounds.height() <= height -> height / 2f - bounds.centerY()
+      bounds.top > 0 -> -bounds.top
+      bounds.bottom < height -> height - bounds.bottom
+      else -> 0f
+    }
+    zoom.postTranslate(dx, dy)
+    shown.postTranslate(dx, dy)
+    imageMatrix = shown
+  }
+
+  private fun zoomBy(factor: Float, x: Float, y: Float) {
+    val next = (scale * factor).coerceIn(1f, 6f)
+    val applied = next / scale
+    scale = next
+    zoom.postScale(applied, applied, x, y)
+    update()
+  }
+
+  private val pinch = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+    override fun onScale(detector: ScaleGestureDetector): Boolean {
+      zoomBy(detector.scaleFactor, detector.focusX, detector.focusY)
+      return true
+    }
+  })
+
+  private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+    override fun onDown(event: MotionEvent) = true
+
+    override fun onScroll(first: MotionEvent?, event: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+      if (!zoomed) return false
+      zoom.postTranslate(-distanceX, -distanceY)
+      update()
+      return true
+    }
+
+    override fun onDoubleTap(event: MotionEvent): Boolean {
+      if (zoomed) reset() else zoomBy(2.5f, event.x, event.y)
+      return true
+    }
+
+    override fun onFling(first: MotionEvent?, event: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+      if (zoomed || kotlin.math.abs(velocityX) < kotlin.math.abs(velocityY) || kotlin.math.abs(velocityX) < 600) {
+        return false
+      }
+      onSwipe?.invoke(if (velocityX < 0) 1 else -1)
+      return true
+    }
+  })
+
+  override fun onTouchEvent(event: MotionEvent): Boolean {
+    pinch.onTouchEvent(event)
+    if (!pinch.isInProgress) {
+      gestures.onTouchEvent(event)
+    }
+    parent?.requestDisallowInterceptTouchEvent(zoomed || event.pointerCount > 1)
+    if (event.actionMasked == MotionEvent.ACTION_UP) {
+      performClick()
+    }
+    return true
+  }
+
+  override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+    super.onSizeChanged(w, h, oldw, oldh)
+    layoutPicture()
   }
 }

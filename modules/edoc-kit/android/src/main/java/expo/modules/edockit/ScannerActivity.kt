@@ -113,7 +113,7 @@ class ScannerActivity : ComponentActivity() {
   private lateinit var torchButton: ImageButton
   private lateinit var zoomLabel: TextView
   private lateinit var reviewLayer: FrameLayout
-  private lateinit var pageImage: ImageView
+  private lateinit var pageImage: ZoomImageView
   private lateinit var counter: TextView
   private lateinit var addButton: View
   private val styleChips = LinkedHashMap<String, TextView>()
@@ -211,6 +211,7 @@ class ScannerActivity : ComponentActivity() {
       finishWith(RESULT_NO_CAMERA)
       return
     }
+    analyzer.execute { PageModel.load(applicationContext) }
     if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
       startCamera()
     } else {
@@ -408,21 +409,7 @@ class ScannerActivity : ComponentActivity() {
 
   private fun buildReview() {
     reviewLayer = FrameLayout(this).apply { visibility = View.GONE }
-    pageImage = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
-    val swipe = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-      override fun onDown(event: MotionEvent) = true
-      override fun onFling(first: MotionEvent?, event: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-        if (abs(velocityX) < abs(velocityY) || abs(velocityX) < 600) {
-          return false
-        }
-        showPage(if (velocityX < 0) current + 1 else current - 1)
-        return true
-      }
-    })
-    pageImage.setOnTouchListener { view, event ->
-      if (event.actionMasked == MotionEvent.ACTION_UP) view.performClick()
-      swipe.onTouchEvent(event)
-    }
+    pageImage = ZoomImageView(this).apply { onSwipe = { step -> showPage(current + step) } }
     reviewLayer.addView(pageImage, frame(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.TOP, intArrayOf(px(16f), px(68f), px(16f), px(150f))))
 
     val top = row().apply { setPadding(px(16f), 0, px(16f), 0) }
@@ -555,14 +542,17 @@ class ScannerActivity : ComponentActivity() {
   private fun analyze(image: ImageProxy) {
     try {
       val now = SystemClock.uptimeMillis()
-      if (!analysing || now - lastAnalysis < 60) {
+      if (!analysing || now - lastAnalysis < 80) {
         return
       }
       lastAnalysis = now
-      val gray = luminance(image)
-      val found = DocumentDetector.find(gray)
+      val rgb = colour(image)
+      val gray = Mat()
+      Imgproc.cvtColor(rgb, gray, Imgproc.COLOR_RGB2GRAY)
+      val found = DocumentDetector.find(rgb, gray)
       val width = gray.cols().toFloat()
       val height = gray.rows().toFloat()
+      rgb.release()
       gray.release()
       val normalized = found?.let { DocumentDetector.normalized(it, width, height) }
       val rotation = image.imageInfo.rotationDegrees
@@ -574,25 +564,35 @@ class ScannerActivity : ComponentActivity() {
     }
   }
 
-  // The brightness plane of a camera frame, scaled down and turned upright for the screen.
-  private fun luminance(image: ImageProxy): Mat {
-    val plane = image.planes[0]
+  // A camera frame in colour, scaled down and turned upright for the screen.
+  private fun colour(image: ImageProxy): Mat {
     val width = image.width
     val height = image.height
-    val buffer = plane.buffer
-    val stride = plane.rowStride
-    val bytes = ByteArray(width * height)
-    if (stride == width) {
-      buffer.position(0)
-      buffer.get(bytes, 0, width * height)
-    } else {
-      for (line in 0 until height) {
-        buffer.position(line * stride)
-        buffer.get(bytes, line * width, width)
+    // The frame's planes rearranged as NV21 (brightness, then interleaved colour), which OpenCV
+    // converts to RGB in one step.
+    val nv21 = ByteArray(width * height * 3 / 2)
+    val luma = image.planes[0]
+    val lumaBuffer = luma.buffer
+    for (line in 0 until height) {
+      lumaBuffer.position(line * luma.rowStride)
+      lumaBuffer.get(nv21, line * width, width)
+    }
+    val u = image.planes[1]
+    val v = image.planes[2]
+    val uBuffer = u.buffer
+    val vBuffer = v.buffer
+    var position = width * height
+    for (line in 0 until height / 2) {
+      for (column in 0 until width / 2) {
+        nv21[position++] = vBuffer.get(line * v.rowStride + column * v.pixelStride)
+        nv21[position++] = uBuffer.get(line * u.rowStride + column * u.pixelStride)
       }
     }
-    val full = Mat(height, width, CvType.CV_8UC1)
-    full.put(0, 0, bytes)
+    val yuv = Mat(height * 3 / 2, width, CvType.CV_8UC1)
+    yuv.put(0, 0, nv21)
+    val full = Mat()
+    Imgproc.cvtColor(yuv, full, Imgproc.COLOR_YUV2RGB_NV21)
+    yuv.release()
     val scale = ANALYSIS_SIDE.toDouble() / max(width, height)
     val small = Mat()
     Imgproc.resize(full, small, Size(), scale, scale, Imgproc.INTER_AREA)
@@ -608,7 +608,6 @@ class ScannerActivity : ComponentActivity() {
     small.release()
     return upright
   }
-
   private fun spread(a: FloatArray, b: FloatArray): Float {
     var largest = 0f
     for (index in a.indices) {

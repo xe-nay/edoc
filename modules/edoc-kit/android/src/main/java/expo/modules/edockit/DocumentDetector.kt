@@ -46,9 +46,37 @@ internal object DocumentDetector {
   // The whole image, as corner positions from 0 to 1.
   val fullFrame = floatArrayOf(0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f)
 
-  // Corners of the page in a greyscale image, in its pixels: top left, top right, bottom right,
-  // bottom left. Null when no page outline stands out.
+  // Corners of the page (top left, top right, bottom right, bottom left) in the pixels of an RGB
+  // image and its greyscale copy, or null when there is no page. The trained model decides
+  // whether there is a page and roughly where; its corners are then snapped to the photo's real
+  // edges when an edge outline lies very close. Without the model, edges alone decide.
+  fun find(rgb: Mat, gray: Mat): Array<Point>? {
+    if (!PageModel.ready) {
+      return find(gray)
+    }
+    val guess = PageModel.find(rgb)?.let { order(it) } ?: return null
+    if (!convex(guess)) {
+      return null
+    }
+    val (found, map) = outlines(gray)
+    val reach = 0.015 * hypot(gray.cols().toDouble(), gray.rows().toDouble())
+    val snapped = found
+      .filter { outline -> (0 until 4).all { distance(outline[it], guess[it]) < reach } }
+      .maxByOrNull { map.support(it) }
+    return if (snapped != null && map.support(snapped) > 0.5) snapped else guess
+  }
+
+  // Corners of the page in a greyscale image from its edges alone: the best scoring outline.
   fun find(gray: Mat): Array<Point>? {
+    val (found, map) = outlines(gray)
+    return found.maxByOrNull { corners ->
+      val share = map.support(corners)
+      quadArea(corners) * share * share
+    }
+  }
+
+  // Every four-cornered outline in a greyscale image, and its edge map for scoring them.
+  private fun outlines(gray: Mat): Pair<List<Array<Point>>, EdgeMap> {
     val width = gray.cols()
     val height = gray.rows()
     val area = height.toDouble() * width
@@ -75,33 +103,19 @@ internal object DocumentDetector {
     Imgproc.morphologyEx(bright, bright, Imgproc.MORPH_CLOSE, closing)
     collect(bright, minArea, maxArea, found)
 
-    var best: Array<Point>? = null
-    if (found.isNotEmpty()) {
-      val reference = Mat()
-      Imgproc.Canny(blurred, reference, 20.0, 60.0)
-      val dx = Mat()
-      val dy = Mat()
-      Imgproc.Sobel(blurred, dx, CvType.CV_32F, 1, 0, 3)
-      Imgproc.Sobel(blurred, dy, CvType.CV_32F, 0, 1, 3)
-      val map = EdgeMap(width, height)
-      reference.get(0, 0, map.edges)
-      dx.get(0, 0, map.dx)
-      dy.get(0, 0, map.dy)
-      var bestScore = 0.0
-      for (corners in found) {
-        val share = map.support(corners)
-        val score = quadArea(corners) * share * share
-        if (score > bestScore) {
-          bestScore = score
-          best = corners
-        }
-      }
-      listOf(reference, dx, dy).forEach { it.release() }
-    }
-    listOf(blurred, edges, small, bright, closing).forEach { it.release() }
-    return best
+    val reference = Mat()
+    Imgproc.Canny(blurred, reference, 20.0, 60.0)
+    val dx = Mat()
+    val dy = Mat()
+    Imgproc.Sobel(blurred, dx, CvType.CV_32F, 1, 0, 3)
+    Imgproc.Sobel(blurred, dy, CvType.CV_32F, 0, 1, 3)
+    val map = EdgeMap(width, height)
+    reference.get(0, 0, map.edges)
+    dx.get(0, 0, map.dx)
+    dy.get(0, 0, map.dy)
+    listOf(blurred, edges, small, bright, closing, reference, dx, dy).forEach { it.release() }
+    return found to map
   }
-
   // Edges and their direction, for checking how well an outline follows the photo's edges.
   private class EdgeMap(val width: Int, val height: Int) {
     val edges = ByteArray(width * height)
@@ -227,13 +241,14 @@ internal object DocumentDetector {
     }
     val rgba = Mat()
     Utils.bitmapToMat(sample, rgba)
+    val rgb = Mat()
+    Imgproc.cvtColor(rgba, rgb, Imgproc.COLOR_RGBA2RGB)
     val gray = Mat()
     Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
-    val corners = find(gray)
+    val corners = find(rgb, gray)
     val width = gray.cols().toFloat()
     val height = gray.rows().toFloat()
-    rgba.release()
-    gray.release()
+    listOf(rgba, rgb, gray).forEach { it.release() }
     if (sample !== bitmap) {
       sample.recycle()
     }
