@@ -84,12 +84,12 @@ class ScannerActivity : ComponentActivity() {
     private const val PHOTO_SIDE = 4096
     private const val AUTO_HOLD_MS = 1100L
     private const val ORIENTATION_HOLD_MS = 400L
-    private val STYLES = listOf("original" to "Original", "enhance" to "Enhance", "gray" to "Gray", "bw" to "B&W")
+    private val STYLES = listOf("original" to "Original", "flex" to "Flex", "enhance" to "Enhance", "gray" to "Gray", "bw" to "B&W")
   }
 
   private class Page(val photo: File, val detected: FloatArray, var corners: FloatArray) {
     var turns = 0
-    var style = "enhance"
+    var style = "flex"
     var output: File? = null
     var thumb: Bitmap? = null
   }
@@ -214,7 +214,10 @@ class ScannerActivity : ComponentActivity() {
       finishWith(RESULT_NO_CAMERA)
       return
     }
-    analyzer.execute { PageModel.load(applicationContext) }
+    analyzer.execute {
+      PageModel.load(applicationContext)
+      PageFlattener.load(applicationContext)
+    }
     intent.getStringArrayListExtra(EXTRA_PAGES)?.takeIf { it.isNotEmpty() }?.let { uris ->
       work({ uris.forEach { uri -> pages.add(existingPage(uri)) } }) {
         updateCameraBar()
@@ -437,12 +440,12 @@ class ScannerActivity : ComponentActivity() {
 
     val chips = row(Gravity.CENTER)
     for ((style, name) in STYLES) {
-      val chip = label(name, 13f, ScannerColors.TEXT, bold = true).apply {
-        setPadding(px(14f), 0, px(14f), 0)
+      val chip = label(name, 12.5f, ScannerColors.TEXT, bold = true).apply {
+        setPadding(px(11f), 0, px(11f), 0)
         setOnClickListener { setStyle(style) }
       }
       styleChips[style] = chip
-      chips.addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, px(32f)).apply { setMargins(px(4f), 0, px(4f), 0) })
+      chips.addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, px(32f)).apply { setMargins(px(3f), 0, px(3f), 0) })
     }
     reviewLayer.addView(chips, frame(ViewGroup.LayoutParams.MATCH_PARENT, px(40f), Gravity.BOTTOM, intArrayOf(0, 0, 0, px(92f))))
 
@@ -847,7 +850,18 @@ class ScannerActivity : ComponentActivity() {
   // Straightens, turns and cleans up a page, and saves the result.
   private fun render(page: Page, photo: Bitmap? = null) {
     val source = photo ?: decode(page.photo, PHOTO_SIDE)
-    val straight = DocumentDetector.straighten(source, page.corners)
+    // With a page outline, the page is cut out with a little margin and flattened (bends, curls
+    // and the perspective all come out straight); the flattening also trims the margin away.
+    val whole = page.corners.contentEquals(DocumentDetector.fullFrame)
+    val straight = if (!whole && PageFlattener.load(applicationContext)) {
+      val wide = DocumentDetector.straighten(source, widened(page.corners, 0.06f))
+      PageFlattener.flatten(wide)?.also { wide.recycle() } ?: run {
+        wide.recycle()
+        DocumentDetector.straighten(source, page.corners)
+      }
+    } else {
+      DocumentDetector.straighten(source, page.corners)
+    }
     if (source !== photo) {
       source.recycle()
     }
@@ -885,6 +899,16 @@ class ScannerActivity : ComponentActivity() {
       shown
     }
     return page
+  }
+
+  // An outline grown by a share of its size around its centre, kept inside the photo.
+  private fun widened(corners: FloatArray, share: Float): FloatArray {
+    val cx = (corners[0] + corners[2] + corners[4] + corners[6]) / 4
+    val cy = (corners[1] + corners[3] + corners[5] + corners[7]) / 4
+    return FloatArray(8) { index ->
+      val centre = if (index % 2 == 0) cx else cy
+      (centre + (corners[index] - centre) * (1 + share)).coerceIn(0f, 1f)
+    }
   }
 
   private fun added(page: Page) {

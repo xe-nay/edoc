@@ -13,7 +13,7 @@ Pod::Spec.new do |s|
   s.swift_version  = '5.9'
 
   s.dependency 'ExpoModulesCore'
-  s.frameworks = 'VisionKit', 'Vision', 'PDFKit', 'CoreImage', 'CryptoKit', 'Security'
+  s.frameworks = 'VisionKit', 'Vision', 'PDFKit', 'CoreImage', 'CryptoKit', 'Security', 'CoreML', 'Accelerate'
 
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
@@ -22,4 +22,6 @@ Pod::Spec.new do |s|
   }
 
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
+  # The page-flattening model, compiled for Core ML by the cloud build (scripts/export-flatten-coreml.py).
+  s.resources = "Models/*.mlmodelc"
 end

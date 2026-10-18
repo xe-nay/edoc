@@ -141,7 +141,7 @@ async function cleanUpScans(docId: string, pageIds: string[]) {
     return;
   }
   for (const pageId of pageIds) {
-    await setPageFilter(docId, pageId, 'enhance');
+    await setPageFilter(docId, pageId, 'flex');
   }
 }
 

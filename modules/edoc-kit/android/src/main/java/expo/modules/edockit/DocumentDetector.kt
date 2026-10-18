@@ -10,6 +10,7 @@ import org.opencv.core.MatOfInt
 import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
+import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.abs
@@ -533,19 +534,28 @@ internal object DocumentDetector {
 
   private fun distance(a: Point, b: Point) = hypot(a.x - b.x, a.y - b.y)
 
-  // Clean-up styles, like CamScanner's: "original" keeps the photo; "enhance" turns the paper pure
+  // Clean-up styles: "original" keeps the photo; "flex", like CamScanner, turns the paper pure
   // white (no shadows, no wrinkle shading, no colour cast), deepens the ink and keeps coloured ink
-  // such as stamps vivid; "gray" is the same in greyscale; "bw" is black on white.
+  // such as stamps vivid; "enhance" evens out the light more gently and keeps the paper's natural
+  // look; "gray" is flex in greyscale; "bw" is black on white.
   //
   // The paper's light is measured on a small copy: a local maximum over a few stroke widths
   // leaves only paper, then a blur at about a sixtieth of the page smooths it while still
   // following wrinkles. Each pixel is divided by that light, then a tone curve sends the paper to
   // white and the ink towards black. Large dark areas (a photo) are not mistaken for shadow.
   // Work happens pixel by pixel on bytes, so a 12 megapixel page needs little memory.
+  // How strongly a style whitens: where the tone curve starts and how wide it is, its power, the
+  // power for coloured ink, how much more vivid colour gets (and coloured ink on top), sharpening.
+  private class Tone(val low: Float, val span: Float, val power: Double, val inkPower: Double, val vivid: Float, val inkVivid: Float, val sharpen: Double)
+
+  private val strong = Tone(0.40f, 0.42f, 1.6, 2.2, 1.25f, 0.6f, 0.7)
+  private val gentle = Tone(0.12f, 0.82f, 1.25, 1.5, 1.12f, 0.3f, 0.35)
+
   fun cleanUp(source: Bitmap, style: String): Bitmap {
-    if (style == "original") {
+    if (style != "flex" && style != "enhance" && style != "gray" && style != "bw") {
       return source.copy(Bitmap.Config.ARGB_8888, false)
     }
+    val tone = if (style == "enhance") gentle else strong
     val width = source.width
     val height = source.height
     val rgba = Mat()
@@ -583,8 +593,8 @@ internal object DocumentDetector {
 
     // Tone curves as tables: paper to white, ink deeper; coloured ink deepened gently.
     val steps = 1024
-    val paperCurve = FloatArray(steps + 1) { (it.toDouble() / steps).pow(1.8).toFloat() }
-    val inkCurve = FloatArray(steps + 1) { (it.toDouble() / steps).pow(2.2).toFloat() }
+    val paperCurve = FloatArray(steps + 1) { (it.toDouble() / steps).pow(tone.power).toFloat() }
+    val inkCurve = FloatArray(steps + 1) { (it.toDouble() / steps).pow(tone.inkPower).toFloat() }
 
     val pixels = ByteArray(width * height * 3)
     rgb.get(0, 0, pixels)
@@ -610,7 +620,7 @@ internal object DocumentDetector {
           even[channel] = ((pixels[base + channel].toInt() and 0xFF) / 255f) / paper
         }
         val luma = (even[0] + even[1] + even[2]) / 3
-        val t = ((luma - 0.35f) / 0.51f).coerceIn(0f, 1f)
+        val t = ((luma - tone.low) / tone.span).coerceIn(0f, 1f)
         val gain = paperCurve[(t * steps).toInt()] / max(luma, 1e-3f)
         val r = even[0].coerceIn(0f, 1f)
         val g = even[1].coerceIn(0f, 1f)
@@ -622,7 +632,7 @@ internal object DocumentDetector {
         }
         // Colour a little more vivid, coloured ink much more.
         val mean = (out[0] + out[1] + out[2]) / 3
-        val vivid = 1.25f + 0.6f * colour
+        val vivid = tone.vivid + tone.inkVivid * colour
         for (channel in 0 until 3) {
           val value = mean + (out[channel] - mean) * vivid
           pixels[base + channel] = (value.coerceIn(0f, 1f) * 255 + 0.5f).toInt().toByte()
@@ -636,8 +646,23 @@ internal object DocumentDetector {
     val blurKernel = Mat(3, 3, CvType.CV_32F)
     blurKernel.put(0, 0, floatArrayOf(1f, 2f, 1f, 2f, 4f, 2f, 1f, 2f, 1f).map { it / 16f }.toFloatArray())
     Imgproc.filter2D(rgb, soft, -1, blurKernel)
-    Core.addWeighted(rgb, 1.6, soft, -0.6, 0.0, rgb)
+    Core.addWeighted(rgb, 1 + tone.sharpen, soft, -tone.sharpen, 0.0, rgb)
     listOf(soft, blurKernel).forEach { it.release() }
+
+    if (style != "enhance") {
+      // Slightly bolder strokes, like a printed page: half a 2 x 2 local minimum blended in.
+      val bold = Mat()
+      val two = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(2.0, 2.0))
+      Imgproc.erode(rgb, bold, two)
+      Core.addWeighted(rgb, 0.5, bold, 0.5, 0.0, rgb)
+      listOf(bold, two).forEach { it.release() }
+    }
+    // Fingers holding the page go white, and so does a thin rim where the page's edge shows.
+    val hands = fingers(rgb)
+    rgb.setTo(Scalar(255.0, 255.0, 255.0), hands)
+    hands.release()
+    val rim = max(2, (0.006 * min(width, height)).roundToInt())
+    Imgproc.rectangle(rgb, Point(0.0, 0.0), Point(width - 1.0, height - 1.0), Scalar(255.0, 255.0, 255.0), rim * 2)
 
     if (style == "gray" || style == "bw") {
       val gray = Mat()
@@ -653,5 +678,45 @@ internal object DocumentDetector {
     rgb.release()
     return output
   }
+  // Fingers holding the page: skin-coloured areas reaching in from the edge of the picture, grown a
+  // little to take in their soft rim and shadow.
+  private fun fingers(rgb: Mat): Mat {
+    val width = rgb.cols()
+    val height = rgb.rows()
+    val ycc = Mat()
+    Imgproc.cvtColor(rgb, ycc, Imgproc.COLOR_RGB2YCrCb)
+    val skin = Mat()
+    Core.inRange(ycc, Scalar(40.0, 135.0, 80.0), Scalar(255.0, 175.0, 128.0), skin)
+    ycc.release()
+    val five = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+    Imgproc.morphologyEx(skin, skin, Imgproc.MORPH_OPEN, five)
+    five.release()
+    val labels = Mat()
+    val stats = Mat()
+    val centres = Mat()
+    val count = Imgproc.connectedComponentsWithStats(skin, labels, stats, centres)
+    val mask = Mat.zeros(height, width, CvType.CV_8UC1)
+    val edge = max(2, (0.01 * min(width, height)).roundToInt())
+    val one = Mat()
+    for (label in 1 until count) {
+      val x = stats.get(label, Imgproc.CC_STAT_LEFT)[0].toInt()
+      val y = stats.get(label, Imgproc.CC_STAT_TOP)[0].toInt()
+      val w = stats.get(label, Imgproc.CC_STAT_WIDTH)[0].toInt()
+      val h = stats.get(label, Imgproc.CC_STAT_HEIGHT)[0].toInt()
+      val area = stats.get(label, Imgproc.CC_STAT_AREA)[0]
+      val touches = x <= edge || y <= edge || x + w >= width - edge || y + h >= height - edge
+      if (touches && area > 0.0015 * width * height) {
+        Core.compare(labels, Scalar(label.toDouble()), one, Core.CMP_EQ)
+        Core.bitwise_or(mask, one, mask)
+      }
+    }
+    listOf(skin, labels, stats, centres, one).forEach { it.release() }
+    val grow = max(3, (0.012 * min(width, height)).roundToInt())
+    val round = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, Size(2.0 * grow + 1, 2.0 * grow + 1))
+    Imgproc.dilate(mask, mask, round)
+    round.release()
+    return mask
+  }
+
   private fun odd(value: Int) = if (value % 2 == 0) value + 1 else value
 }

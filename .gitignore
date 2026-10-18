@@ -44,3 +44,6 @@ yarn-error.*
 modules/*/android/build/
 modules/*/android/.gradle/
 modules/*/android/.cxx/
+
+# Core ML model compiled by the cloud build
+modules/edoc-kit/ios/Models/

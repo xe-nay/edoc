@@ -6,7 +6,7 @@ export type KitPage = {
   height: number;
 };
 
-export type KitFilter = 'none' | 'enhance' | 'gray' | 'bw';
+export type KitFilter = 'none' | 'flex' | 'enhance' | 'gray' | 'bw';
 
 type EdocKitModule = {
   // Opens the system document scanner; resolves with [] when cancelled.

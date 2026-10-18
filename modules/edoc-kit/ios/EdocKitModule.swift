@@ -1,5 +1,6 @@
 import Accelerate
 import CoreImage
+import CoreML
 import ExpoModulesCore
 import PDFKit
 import UIKit
@@ -64,19 +65,35 @@ private func redraw(_ image: UIImage, maxDimension: CGFloat, quarterTurns: Int) 
   }
 }
 
-// Clean-up styles, like CamScanner's, the same as on Android: "enhance" turns the paper pure white
+// Clean-up styles, the same as on Android: "flex", like CamScanner, turns the paper pure white
 // (no shadows, no wrinkle shading, no colour cast), deepens the ink and keeps coloured ink such as
-// stamps vivid; "gray" is the same in greyscale; "bw" is black on white; anything else keeps the
-// photo.
+// stamps vivid; "enhance" evens out the light more gently and keeps the paper's natural look;
+// "gray" is flex in greyscale; "bw" is black on white; anything else keeps the photo.
 //
 // The paper's light is measured on a small copy: a local maximum over a few stroke widths leaves
 // only paper, then a blur at about a sixtieth of the page smooths it while still following
 // wrinkles. Each pixel is divided by that light, then a tone curve sends the paper to white and
 // the ink towards black. Large dark areas (a photo) are not mistaken for shadow.
+// How strongly a style whitens: where the tone curve starts and how wide it is, its power, the power
+// for coloured ink, how much more vivid colour gets (and coloured ink on top), sharpening.
+private struct Tone {
+  let low: Float
+  let span: Float
+  let power: Double
+  let inkPower: Double
+  let vivid: Float
+  let inkVivid: Float
+  let sharpen: Float
+}
+
+private let strongTone = Tone(low: 0.40, span: 0.42, power: 1.6, inkPower: 2.2, vivid: 1.25, inkVivid: 0.6, sharpen: 0.7)
+private let gentleTone = Tone(low: 0.12, span: 0.82, power: 1.25, inkPower: 1.5, vivid: 1.12, inkVivid: 0.3, sharpen: 0.35)
+
 private func filtered(_ image: UIImage, filter: String) -> UIImage {
-  guard filter == "enhance" || filter == "gray" || filter == "bw", let source = image.cgImage else {
+  guard ["flex", "enhance", "gray", "bw"].contains(filter), let source = image.cgImage else {
     return image
   }
+  let tone = filter == "enhance" ? gentleTone : strongTone
   let width = source.width
   let height = source.height
   let space = CGColorSpaceCreateDeviceRGB()
@@ -139,8 +156,8 @@ private func filtered(_ image: UIImage, filter: String) -> UIImage {
 
   // Tone curves as tables: paper to white, ink deeper; coloured ink deepened gently.
   let steps = 1024
-  let paperCurve = (0...steps).map { Float(pow(Double($0) / Double(steps), 1.8)) }
-  let inkCurve = (0...steps).map { Float(pow(Double($0) / Double(steps), 2.2)) }
+  let paperCurve = (0...steps).map { Float(pow(Double($0) / Double(steps), tone.power)) }
+  let inkCurve = (0...steps).map { Float(pow(Double($0) / Double(steps), tone.inkPower)) }
 
   var bytes = pixels(of: source, width: width, height: height)
   var even = [Float](repeating: 0, count: 3)
@@ -166,7 +183,7 @@ private func filtered(_ image: UIImage, filter: String) -> UIImage {
         even[channel] = (Float(bytes[base + channel]) / 255) / paper
       }
       let luma = (even[0] + even[1] + even[2]) / 3
-      let t = min(max((luma - 0.35) / 0.51, 0), 1)
+      let t = min(max((luma - tone.low) / tone.span, 0), 1)
       let gain = paperCurve[Int(t * Float(steps))] / max(luma, 1e-3)
       let r = min(max(even[0], 0), 1)
       let g = min(max(even[1], 0), 1)
@@ -178,7 +195,7 @@ private func filtered(_ image: UIImage, filter: String) -> UIImage {
       }
       // Colour a little more vivid, coloured ink much more.
       let mean = (out[0] + out[1] + out[2]) / 3
-      let vivid = 1.25 + 0.6 * colour
+      let vivid = tone.vivid + tone.inkVivid * colour
       for channel in 0..<3 {
         let value = mean + (out[channel] - mean) * vivid
         bytes[base + channel] = UInt8(min(max(value, 0), 1) * 255 + 0.5)
@@ -200,21 +217,56 @@ private func filtered(_ image: UIImage, filter: String) -> UIImage {
       vImageConvolve_ARGB8888(&a, &b, nil, 0, 0, kernel, 3, 3, 16, nil, vImage_Flags(kvImageEdgeExtend))
     }
   }
+  let keep = 1 + tone.sharpen
   for index in stride(from: 0, to: bytes.count, by: 4) {
-    var r = 1.6 * Float(bytes[index]) - 0.6 * Float(soft[index])
-    var g = 1.6 * Float(bytes[index + 1]) - 0.6 * Float(soft[index + 1])
-    var b = 1.6 * Float(bytes[index + 2]) - 0.6 * Float(soft[index + 2])
-    if filter != "enhance" {
-      var gray = 0.299 * r + 0.587 * g + 0.114 * b
-      if filter == "bw" { gray = gray >= 152 ? 255 : 0 }
-      r = gray
-      g = gray
-      b = gray
+    for channel in 0..<3 {
+      let value = keep * Float(bytes[index + channel]) - tone.sharpen * Float(soft[index + channel])
+      bytes[index + channel] = UInt8(min(max(value, 0), 255))
     }
-    bytes[index] = UInt8(min(max(r, 0), 255))
-    bytes[index + 1] = UInt8(min(max(g, 0), 255))
-    bytes[index + 2] = UInt8(min(max(b, 0), 255))
     bytes[index + 3] = 255
+  }
+
+  if filter != "enhance" {
+    // Slightly bolder strokes, like a printed page: half a 2 x 2 local minimum blended in.
+    let copy = bytes
+    for y in 0..<height {
+      let below = min(y + 1, height - 1)
+      for x in 0..<width {
+        let right = min(x + 1, width - 1)
+        let base = (y * width + x) * 4
+        for channel in 0..<3 {
+          let lowest = min(
+            copy[base + channel], copy[(y * width + right) * 4 + channel],
+            copy[(below * width + x) * 4 + channel], copy[(below * width + right) * 4 + channel])
+          bytes[base + channel] = UInt8((UInt16(copy[base + channel]) + UInt16(lowest) + 1) / 2)
+        }
+      }
+    }
+  }
+
+  // Fingers holding the page go white, and so does a thin rim where the page's edge shows.
+  let hands = fingerMask(bytes, width: width, height: height)
+  let rim = max(2, Int((0.006 * Double(min(width, height))).rounded()))
+  for y in 0..<height {
+    for x in 0..<width {
+      let pixel = y * width + x
+      if hands[pixel] != 0 || x < rim || y < rim || x >= width - rim || y >= height - rim {
+        bytes[pixel * 4] = 255
+        bytes[pixel * 4 + 1] = 255
+        bytes[pixel * 4 + 2] = 255
+      }
+    }
+  }
+
+  if filter == "gray" || filter == "bw" {
+    for index in stride(from: 0, to: bytes.count, by: 4) {
+      var gray = 0.299 * Float(bytes[index]) + 0.587 * Float(bytes[index + 1]) + 0.114 * Float(bytes[index + 2])
+      if filter == "bw" { gray = gray >= 152 ? 255 : 0 }
+      let value = UInt8(min(max(gray, 0), 255))
+      bytes[index] = value
+      bytes[index + 1] = value
+      bytes[index + 2] = value
+    }
   }
 
   let result: CGImage? = bytes.withUnsafeMutableBytes { buffer in
@@ -227,6 +279,215 @@ private func filtered(_ image: UIImage, filter: String) -> UIImage {
   }
   return UIImage(cgImage: cleaned, scale: 1, orientation: .up)
 }
+// Fingers holding the page: skin-coloured areas reaching in from the edge of the picture, grown a
+// little to take in their soft rim and shadow. Returns one byte per pixel, non-zero on a finger.
+private func fingerMask(_ bytes: [UInt8], width: Int, height: Int) -> [UInt8] {
+  let count = width * height
+  var skin = [UInt8](repeating: 0, count: count)
+  for pixel in 0..<count {
+    let r = Float(bytes[pixel * 4])
+    let g = Float(bytes[pixel * 4 + 1])
+    let b = Float(bytes[pixel * 4 + 2])
+    let luma = 0.299 * r + 0.587 * g + 0.114 * b
+    let cr = (r - luma) * 0.713 + 128
+    let cb = (b - luma) * 0.564 + 128
+    if luma >= 40 && cr >= 135 && cr <= 175 && cb >= 80 && cb <= 128 {
+      skin[pixel] = 255
+    }
+  }
+
+  func morph(_ grow: Bool, _ size: Int, _ from: inout [UInt8], _ to: inout [UInt8]) {
+    from.withUnsafeMutableBytes { a in
+      to.withUnsafeMutableBytes { b in
+        var source = vImage_Buffer(
+          data: a.baseAddress, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width)
+        var target = vImage_Buffer(
+          data: b.baseAddress, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width)
+        let flags = vImage_Flags(kvImageEdgeExtend)
+        if grow {
+          vImageMax_Planar8(&source, &target, nil, 0, 0, vImagePixelCount(size), vImagePixelCount(size), flags)
+        } else {
+          vImageMin_Planar8(&source, &target, nil, 0, 0, vImagePixelCount(size), vImagePixelCount(size), flags)
+        }
+      }
+    }
+  }
+
+  // Specks and thin lines are not fingers: an opening with a 5 x 5 square removes them.
+  var work = [UInt8](repeating: 0, count: count)
+  morph(false, 5, &skin, &work)
+  morph(true, 5, &work, &skin)
+
+  // Keep the skin regions that touch the edge and are big enough to be a finger.
+  var mask = [UInt8](repeating: 0, count: count)
+  var seen = [Bool](repeating: false, count: count)
+  var queue = [Int]()
+  let edge = max(2, Int(0.01 * Double(min(width, height))))
+  let minimum = Int(0.0015 * Double(count))
+  for start in 0..<count where skin[start] != 0 && !seen[start] {
+    queue.removeAll(keepingCapacity: true)
+    queue.append(start)
+    seen[start] = true
+    var head = 0
+    var touches = false
+    while head < queue.count {
+      let pixel = queue[head]
+      head += 1
+      let x = pixel % width
+      let y = pixel / width
+      if x <= edge || y <= edge || x >= width - 1 - edge || y >= height - 1 - edge {
+        touches = true
+      }
+      let neighbours = [
+        x > 0 ? pixel - 1 : -1, x < width - 1 ? pixel + 1 : -1,
+        y > 0 ? pixel - width : -1, y < height - 1 ? pixel + width : -1,
+      ]
+      for next in neighbours where next >= 0 && skin[next] != 0 && !seen[next] {
+        seen[next] = true
+        queue.append(next)
+      }
+    }
+    if touches && queue.count > minimum {
+      for pixel in queue {
+        mask[pixel] = 255
+      }
+    }
+  }
+  var grown = [UInt8](repeating: 0, count: count)
+  let size = 2 * max(3, Int(0.012 * Double(min(width, height)))) + 1
+  morph(true, size, &mask, &grown)
+  return grown
+}
+
+// The page-flattening model (UVDoc, MIT License), compiled for Core ML by the cloud build.
+private let flattenModel: MLModel? = {
+  guard let url = Bundle.main.url(forResource: "PageFlatten", withExtension: "mlmodelc") else {
+    return nil
+  }
+  let configuration = MLModelConfiguration()
+  configuration.computeUnits = .all
+  return try? MLModel(contentsOf: url, configuration: configuration)
+}()
+
+// Flattens a bent or curled page so its lines come out straight. The scanner's page is set on a
+// dark margin (the model expects some surroundings), the model says on a 45 x 31 grid where each
+// point of the flat page lies, and the picture is resampled along that grid at full size.
+private func flattenPage(_ image: UIImage) -> UIImage {
+  guard let model = flattenModel, let source = image.cgImage else {
+    return image
+  }
+  let space = CGColorSpaceCreateDeviceRGB()
+  let info = CGImageAlphaInfo.noneSkipLast.rawValue
+  let margin = Int(0.07 * Double(max(source.width, source.height)))
+  let width = source.width + 2 * margin
+  let height = source.height + 2 * margin
+
+  func picture(of bytes: inout [UInt8], width: Int, height: Int) -> CGImage? {
+    return bytes.withUnsafeMutableBytes { buffer in
+      CGContext(
+        data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+        space: space, bitmapInfo: info)?.makeImage()
+    }
+  }
+
+  var padded = [UInt8](repeating: 40, count: width * height * 4)
+  padded.withUnsafeMutableBytes { buffer in
+    if let context = CGContext(
+      data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+      space: space, bitmapInfo: info)
+    {
+      context.draw(source, in: CGRect(x: margin, y: margin, width: source.width, height: source.height))
+    }
+  }
+  guard let paddedImage = picture(of: &padded, width: width, height: height) else {
+    return image
+  }
+
+  // The model's view of the page: 488 x 712, colour planes from 0 to 1.
+  let inWidth = 488
+  let inHeight = 712
+  var small = [UInt8](repeating: 0, count: inWidth * inHeight * 4)
+  small.withUnsafeMutableBytes { buffer in
+    if let context = CGContext(
+      data: buffer.baseAddress, width: inWidth, height: inHeight, bitsPerComponent: 8, bytesPerRow: inWidth * 4,
+      space: space, bitmapInfo: info)
+    {
+      context.interpolationQuality = .high
+      context.draw(paddedImage, in: CGRect(x: 0, y: 0, width: inWidth, height: inHeight))
+    }
+  }
+  guard
+    let input = try? MLMultiArray(
+      shape: [1, 3, NSNumber(value: inHeight), NSNumber(value: inWidth)], dataType: .float32)
+  else {
+    return image
+  }
+  let plane = inWidth * inHeight
+  let values = input.dataPointer.bindMemory(to: Float32.self, capacity: 3 * plane)
+  for pixel in 0..<plane {
+    for channel in 0..<3 {
+      values[channel * plane + pixel] = Float32(small[pixel * 4 + channel]) / 255
+    }
+  }
+  guard
+    let features = try? MLDictionaryFeatureProvider(dictionary: ["input": MLFeatureValue(multiArray: input)]),
+    let prediction = try? model.prediction(from: features),
+    let grid = prediction.featureValue(for: "grid")?.multiArrayValue
+  else {
+    return image
+  }
+  let rows = 45
+  let columns = 31
+  var gridX = [Float](repeating: 0, count: rows * columns)
+  var gridY = [Float](repeating: 0, count: rows * columns)
+  for row in 0..<rows {
+    for column in 0..<columns {
+      gridX[row * columns + column] = grid[[0, 0, NSNumber(value: row), NSNumber(value: column)]].floatValue
+      gridY[row * columns + column] = grid[[0, 1, NSNumber(value: row), NSNumber(value: column)]].floatValue
+    }
+  }
+
+  // Resample: for each point of the flat page, where it lies in the padded picture.
+  var flat = [UInt8](repeating: 255, count: width * height * 4)
+  let maxX = Float(width - 1)
+  let maxY = Float(height - 1)
+  for y in 0..<height {
+    let v = Float(y) / maxY * Float(rows - 1)
+    let r0 = min(Int(v), rows - 2)
+    let fv = v - Float(r0)
+    for x in 0..<width {
+      let u = Float(x) / maxX * Float(columns - 1)
+      let c0 = min(Int(u), columns - 2)
+      let fu = u - Float(c0)
+      let i00 = r0 * columns + c0
+      let gx =
+        (gridX[i00] * (1 - fu) + gridX[i00 + 1] * fu) * (1 - fv)
+        + (gridX[i00 + columns] * (1 - fu) + gridX[i00 + columns + 1] * fu) * fv
+      let gy =
+        (gridY[i00] * (1 - fu) + gridY[i00 + 1] * fu) * (1 - fv)
+        + (gridY[i00 + columns] * (1 - fu) + gridY[i00 + columns + 1] * fu) * fv
+      let sx = min(max((gx + 1) / 2 * maxX, 0), maxX)
+      let sy = min(max((gy + 1) / 2 * maxY, 0), maxY)
+      let x0 = min(Int(sx), width - 2)
+      let y0 = min(Int(sy), height - 2)
+      let fx = sx - Float(x0)
+      let fy = sy - Float(y0)
+      let p00 = (y0 * width + x0) * 4
+      let p10 = p00 + width * 4
+      let out = (y * width + x) * 4
+      for channel in 0..<3 {
+        let top = Float(padded[p00 + channel]) * (1 - fx) + Float(padded[p00 + 4 + channel]) * fx
+        let bottom = Float(padded[p10 + channel]) * (1 - fx) + Float(padded[p10 + 4 + channel]) * fx
+        flat[out + channel] = UInt8(min(max(top * (1 - fy) + bottom * fy, 0), 255))
+      }
+    }
+  }
+  guard let result = picture(of: &flat, width: width, height: height) else {
+    return image
+  }
+  return UIImage(cgImage: result, scale: 1, orientation: .up)
+}
+
 private final class ScanDelegate: NSObject, VNDocumentCameraViewControllerDelegate {
   private let outDir: URL
   private let promise: Promise
@@ -249,7 +510,7 @@ private final class ScanDelegate: NSObject, VNDocumentCameraViewControllerDelega
       try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
       for index in 0..<scan.pageCount {
         try autoreleasepool {
-          let image = redraw(scan.imageOfPage(at: index), maxDimension: 0, quarterTurns: 0)
+          let image = flattenPage(redraw(scan.imageOfPage(at: index), maxDimension: 0, quarterTurns: 0))
           guard let data = image.jpegData(compressionQuality: jpegQuality) else {
             return
           }

@@ -1,6 +1,6 @@
 export type Tag = 'personal' | 'professional';
 
-export type PageFilter = 'none' | 'enhance' | 'gray' | 'bw';
+export type PageFilter = 'none' | 'flex' | 'enhance' | 'gray' | 'bw';
 
 export type Page = {
   id: string;

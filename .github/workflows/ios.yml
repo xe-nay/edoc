@@ -57,6 +57,17 @@ jobs:
       - name: Generate the native project
         run: npx expo prebuild --platform ios --no-install
 
+      # The page-flattening model (UVDoc, MIT License) converted to Core ML; the app includes it.
+      - name: Prepare the page-flattening model
+        run: |
+          python3 -m venv /tmp/convert
+          /tmp/convert/bin/pip install --quiet torch==2.7.1 coremltools==9.0
+          git clone --depth 1 https://github.com/tanguymagne/UVDoc /tmp/UVDoc
+          /tmp/convert/bin/python scripts/export-flatten-coreml.py /tmp/UVDoc /tmp/PageFlatten.mlpackage
+          mkdir -p modules/edoc-kit/ios/Models
+          xcrun coremlcompiler compile /tmp/PageFlatten.mlpackage modules/edoc-kit/ios/Models/
+          ls modules/edoc-kit/ios/Models
+
       - name: Cache CocoaPods
         uses: actions/cache@v4
         with:

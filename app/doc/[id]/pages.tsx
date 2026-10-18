@@ -14,6 +14,7 @@ import type { Page, PageFilter } from '../../../src/types';
 
 const filters: { value: PageFilter; label: string }[] = [
   { value: 'none', label: 'Original' },
+  { value: 'flex', label: 'Flex' },
   { value: 'enhance', label: 'Enhance' },
   { value: 'gray', label: 'Grayscale' },
   { value: 'bw', label: 'Black & White' },
