@@ -14,10 +14,13 @@ import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 // Finds a page in a photo, straightens it and cleans it up, with OpenCV, on the phone.
@@ -46,7 +49,9 @@ internal object DocumentDetector {
   // Corners of the page in a greyscale image, in its pixels: top left, top right, bottom right,
   // bottom left. Null when no page outline stands out.
   fun find(gray: Mat): Array<Point>? {
-    val area = gray.rows().toDouble() * gray.cols()
+    val width = gray.cols()
+    val height = gray.rows()
+    val area = height.toDouble() * width
     val minArea = 0.1 * area
     val maxArea = 0.97 * area
     val blurred = Mat()
@@ -56,6 +61,11 @@ internal object DocumentDetector {
     val small = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
     for ((low, high) in listOf(20.0 to 60.0, 40.0 to 120.0, 75.0 to 200.0)) {
       Imgproc.Canny(blurred, edges, low, high)
+      if (low == 40.0) {
+        // Outlines made of four straight edges still work when a chair or a table edge touches
+        // the page, which joins their outlines into one shape.
+        collectFromLines(edges, width, height, minArea, maxArea, found)
+      }
       Imgproc.dilate(edges, edges, small)
       collect(edges, minArea, maxArea, found)
     }
@@ -69,27 +79,143 @@ internal object DocumentDetector {
     if (found.isNotEmpty()) {
       val reference = Mat()
       Imgproc.Canny(blurred, reference, 20.0, 60.0)
-      val wide = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
-      Imgproc.dilate(reference, reference, wide)
-      val width = reference.cols()
-      val pixels = ByteArray(width * reference.rows())
-      reference.get(0, 0, pixels)
+      val dx = Mat()
+      val dy = Mat()
+      Imgproc.Sobel(blurred, dx, CvType.CV_32F, 1, 0, 3)
+      Imgproc.Sobel(blurred, dy, CvType.CV_32F, 0, 1, 3)
+      val map = EdgeMap(width, height)
+      reference.get(0, 0, map.edges)
+      dx.get(0, 0, map.dx)
+      dy.get(0, 0, map.dy)
       var bestScore = 0.0
       for (corners in found) {
-        val share = support(pixels, width, reference.rows(), corners)
-        val score = quadArea(corners) * share * share * share
+        val share = map.support(corners)
+        val score = quadArea(corners) * share * share
         if (score > bestScore) {
           bestScore = score
           best = corners
         }
       }
-      reference.release()
-      wide.release()
+      listOf(reference, dx, dy).forEach { it.release() }
     }
     listOf(blurred, edges, small, bright, closing).forEach { it.release() }
     return best
   }
 
+  // Edges and their direction, for checking how well an outline follows the photo's edges.
+  private class EdgeMap(val width: Int, val height: Int) {
+    val edges = ByteArray(width * height)
+    val dx = FloatArray(width * height)
+    val dy = FloatArray(width * height)
+
+    // Share of points along the four sides that sit on an edge running the same way as the side
+    // (an edge crossing it, such as a chair arm, does not count).
+    fun support(corners: Array<Point>): Double {
+      var hits = 0
+      var total = 0
+      for (side in 0 until 4) {
+        val a = corners[side]
+        val b = corners[(side + 1) % 4]
+        val length = hypot(b.x - a.x, b.y - a.y)
+        if (length < 1) {
+          continue
+        }
+        val nx = -(b.y - a.y) / length
+        val ny = (b.x - a.x) / length
+        for (step in 0 until 40) {
+          val t = 0.05 + 0.9 * step / 39.0
+          val x = a.x + (b.x - a.x) * t
+          val y = a.y + (b.y - a.y) * t
+          total++
+          for (offset in intArrayOf(0, -1, 1, -2, 2)) {
+            val px = (x + nx * offset).roundToInt()
+            val py = (y + ny * offset).roundToInt()
+            if (px !in 0 until width || py !in 0 until height) {
+              continue
+            }
+            val index = py * width + px
+            if (edges[index].toInt() == 0) {
+              continue
+            }
+            val gx = dx[index].toDouble()
+            val gy = dy[index].toDouble()
+            val magnitude = hypot(gx, gy)
+            if (magnitude > 0 && abs(gx * nx + gy * ny) / magnitude > 0.85) {
+              hits++
+              break
+            }
+          }
+        }
+      }
+      return if (total > 0) hits.toDouble() / total else 0.0
+    }
+  }
+
+  // A straight edge: direction (0 to pi), distance from the origin along its normal, total
+  // length, and two points on it.
+  private class Line(val angle: Double, val offset: Double, var length: Double, val x1: Double, val y1: Double, val x2: Double, val y2: Double)
+
+  private fun straightEdges(edges: Mat, minLength: Double): List<Line> {
+    val segments = Mat()
+    Imgproc.HoughLinesP(edges, segments, 1.0, Math.PI / 180, 40, minLength, 12.0)
+    val lines = ArrayList<Line>()
+    val values = IntArray(4)
+    for (row in 0 until segments.rows()) {
+      segments.get(row, 0, values)
+      val x1 = values[0].toDouble()
+      val y1 = values[1].toDouble()
+      val x2 = values[2].toDouble()
+      val y2 = values[3].toDouble()
+      var angle = atan2(y2 - y1, x2 - x1)
+      if (angle < 0) angle += Math.PI
+      if (angle >= Math.PI) angle -= Math.PI
+      val offset = -sin(angle) * x1 + cos(angle) * y1
+      lines.add(Line(angle, offset, hypot(x2 - x1, y2 - y1), x1, y1, x2, y2))
+    }
+    segments.release()
+    lines.sortByDescending { it.length }
+    // Pieces of the same edge are merged into one.
+    val kept = ArrayList<Line>()
+    for (line in lines) {
+      val same = kept.firstOrNull { other ->
+        val difference = abs(line.angle - other.angle)
+        min(difference, Math.PI - difference) < Math.toRadians(4.0) && abs(line.offset - other.offset) < 8
+      }
+      if (same != null) same.length += line.length else kept.add(line)
+    }
+    return kept
+  }
+
+  private fun crossing(a: Line, b: Line): Point? {
+    val d = (a.x1 - a.x2) * (b.y1 - b.y2) - (a.y1 - a.y2) * (b.x1 - b.x2)
+    if (abs(d) < 1e-6) {
+      return null
+    }
+    val t = ((a.x1 - b.x1) * (b.y1 - b.y2) - (a.y1 - b.y1) * (b.x1 - b.x2)) / d
+    return Point(a.x1 + t * (a.x2 - a.x1), a.y1 + t * (a.y2 - a.y1))
+  }
+
+  private fun collectFromLines(edges: Mat, width: Int, height: Int, minArea: Double, maxArea: Double, found: MutableList<Array<Point>>) {
+    val lines = straightEdges(edges, 0.12 * min(width, height))
+    val across = lines.filter { it.angle < Math.toRadians(40.0) || it.angle > Math.toRadians(140.0) }.take(8)
+    val upright = lines.filter { it.angle > Math.toRadians(50.0) && it.angle < Math.toRadians(130.0) }.take(8)
+    val margin = 0.04 * max(width, height)
+    for (i in across.indices) for (j in i + 1 until across.size) for (k in upright.indices) for (m in k + 1 until upright.size) {
+      val points = arrayOf(
+        crossing(across[i], upright[k]), crossing(across[i], upright[m]),
+        crossing(across[j], upright[k]), crossing(across[j], upright[m]),
+      )
+      if (points.any { it == null || it.x < -margin || it.x > width + margin || it.y < -margin || it.y > height + margin }) {
+        continue
+      }
+      val clamped = points.map { Point(it!!.x.coerceIn(0.0, width - 1.0), it.y.coerceIn(0.0, height - 1.0)) }.toTypedArray()
+      val corners = order(clamped)
+      val size = quadArea(corners)
+      if (size in minArea..maxArea && convex(corners) && squareEnough(corners)) {
+        found.add(corners)
+      }
+    }
+  }
   // Page corners in a bitmap, from 0 to 1 (x, y for each corner), found on a copy whose longest
   // side is about maxSide pixels.
   fun find(bitmap: Bitmap, maxSide: Int): FloatArray? {
@@ -221,28 +347,6 @@ internal object DocumentDetector {
       sum += a.x * b.y - b.x * a.y
     }
     return abs(sum) / 2
-  }
-
-  // Share of points along the four sides that sit on an edge.
-  private fun support(edges: ByteArray, width: Int, height: Int, corners: Array<Point>): Double {
-    var hits = 0
-    var total = 0
-    for (side in 0 until 4) {
-      val a = corners[side]
-      val b = corners[(side + 1) % 4]
-      for (step in 0 until 40) {
-        val t = 0.05 + 0.9 * step / 39.0
-        val x = (a.x + (b.x - a.x) * t).roundToInt()
-        val y = (a.y + (b.y - a.y) * t).roundToInt()
-        if (x in 0 until width && y in 0 until height) {
-          total++
-          if (edges[y * width + x].toInt() != 0) {
-            hits++
-          }
-        }
-      }
-    }
-    return if (total > 0) hits.toDouble() / total else 0.0
   }
 
   // Cuts the page out of the photo and flattens it. Corners go from 0 to 1.

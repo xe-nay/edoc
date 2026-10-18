@@ -20,6 +20,7 @@ import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.OrientationEventListener
+import android.view.ScaleGestureDetector
 import android.view.Surface
 import android.view.View
 import android.view.ViewGroup
@@ -57,6 +58,7 @@ import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -109,6 +111,7 @@ class ScannerActivity : ComponentActivity() {
   private lateinit var doneButton: View
   private lateinit var modeLabel: TextView
   private lateinit var torchButton: ImageButton
+  private lateinit var zoomLabel: TextView
   private lateinit var reviewLayer: FrameLayout
   private lateinit var pageImage: ImageView
   private lateinit var counter: TextView
@@ -129,6 +132,11 @@ class ScannerActivity : ComponentActivity() {
   @Volatile
   private var analysing = true
   private var lastAnalysis = 0L
+  private var tracked: FloatArray? = null
+  private var challenger: FloatArray? = null
+  private var challengerFrames = 0
+  private var misses = 0
+  private var frameAspect = 0.75f
   private var corners: FloatArray? = null
   private var lastSeen = 0L
   private var stableSince = 0L
@@ -323,9 +331,30 @@ class ScannerActivity : ComponentActivity() {
         return true
       }
     })
+    // Pinch to zoom, from the main lens's widest view up to 8 times.
+    val pinch = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+      override fun onScale(detector: ScaleGestureDetector): Boolean {
+        val state = camera?.cameraInfo?.zoomState?.value ?: return false
+        val lowest = max(state.minZoomRatio, 1f)
+        val highest = kotlin.math.min(state.maxZoomRatio, 8f)
+        val ratio = (state.zoomRatio * detector.scaleFactor).coerceIn(lowest, max(lowest, highest))
+        camera?.cameraControl?.setZoomRatio(ratio)
+        showZoom(ratio)
+        return true
+      }
+    })
     overlay.setOnTouchListener { view, event ->
       if (event.actionMasked == MotionEvent.ACTION_UP) view.performClick()
-      focus.onTouchEvent(event)
+      pinch.onTouchEvent(event)
+      if (!pinch.isInProgress && event.pointerCount == 1) {
+        focus.onTouchEvent(event)
+      }
+      true
+    }
+    zoomLabel = label("", 13f, ScannerColors.TEXT, bold = true).apply {
+      background = rounded(ScannerColors.PANEL, dp(14f))
+      setPadding(px(12f), 0, px(12f), 0)
+      alpha = 0f
     }
 
     val top = row().apply { setPadding(px(16f), 0, px(16f), 0) }
@@ -372,6 +401,7 @@ class ScannerActivity : ComponentActivity() {
     }.apply { visibility = View.INVISIBLE }
     bottom.addView(doneButton, frame(px(52f), px(52f), Gravity.END or Gravity.CENTER_VERTICAL, intArrayOf(0, 0, px(28f), 0)))
     cameraLayer.addView(bottom, frame(ViewGroup.LayoutParams.MATCH_PARENT, px(128f), Gravity.BOTTOM))
+    cameraLayer.addView(zoomLabel, frame(ViewGroup.LayoutParams.WRAP_CONTENT, px(28f), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, intArrayOf(0, 0, 0, px(140f))))
 
     root.addView(cameraLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
   }
@@ -485,8 +515,8 @@ class ScannerActivity : ComponentActivity() {
             .setResolutionStrategy(ResolutionStrategy(android.util.Size(4032, 3024), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
             .build(),
         )
-        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-        .setJpegQuality(92)
+        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+        .setJpegQuality(95)
         .build()
       try {
         provider.unbindAll()
@@ -500,6 +530,14 @@ class ScannerActivity : ComponentActivity() {
       this.imageCapture = capture
       torchButton.visibility = if (camera?.cameraInfo?.hasFlashUnit() == true) View.VISIBLE else View.INVISIBLE
     }, ContextCompat.getMainExecutor(this))
+  }
+
+  // Shows the zoom level for a moment while pinching.
+  private fun showZoom(ratio: Float) {
+    zoomLabel.text = String.format(java.util.Locale.US, "%.1f×", ratio)
+    zoomLabel.animate().cancel()
+    zoomLabel.alpha = 1f
+    zoomLabel.animate().alpha(0f).setStartDelay(900).setDuration(300).start()
   }
 
   private fun setTorch(on: Boolean) {
@@ -579,48 +617,70 @@ class ScannerActivity : ComponentActivity() {
     return largest
   }
 
+  // The outline follows the page smoothly. A different outline replaces it only after it has
+  // shown up in several frames in a row, and a page missing for a frame or two keeps its outline,
+  // so the outline no longer jumps between the page and things around it.
   private fun onFrame(found: FloatArray?, aspect: Float, rotation: Int) {
     if (!analysing || cameraLayer.visibility != View.VISIBLE) {
       return
     }
     analysisRotation = rotation
+    frameAspect = aspect
     val now = SystemClock.uptimeMillis()
+    val current = tracked
     if (found != null) {
-      val previous = corners
-      if (previous == null || spread(previous, found) > 0.02f) {
-        stableSince = now
-      }
-      corners = found
-      lastSeen = now
-      overlay.show(found, aspect)
-      // After a capture, the next one waits for the page to be taken away or clearly moved.
-      capturedCorners?.let {
-        if (spread(it, found) > 0.25f) {
-          armed = true
-          capturedCorners = null
+      misses = 0
+      val difference = current?.let { spread(it, found) }
+      if (current != null && difference != null && difference < 0.06f) {
+        if (difference > 0.015f) {
+          stableSince = now
+        }
+        for (index in current.indices) {
+          current[index] += (found[index] - current[index]) * 0.35f
+        }
+        challenger = null
+      } else {
+        val rival = challenger
+        if (rival != null && spread(rival, found) < 0.05f) {
+          challengerFrames++
+        } else {
+          challenger = found
+          challengerFrames = 1
+        }
+        if (challengerFrames >= (if (current == null) 2 else 3)) {
+          tracked = found.copyOf()
+          challenger = null
+          stableSince = now
         }
       }
-    } else if (now - lastSeen > 350) {
-      corners = null
+    } else if (++misses > 8) {
+      tracked = null
+      challenger = null
       stableSince = now
-      overlay.show(null, aspect)
-      if (now - lastSeen > 700 && capturedCorners != null) {
+    }
+    corners = tracked
+    overlay.show(tracked, aspect)
+    // After a capture, the next one waits for the page to be taken away or clearly moved.
+    capturedCorners?.let { captured ->
+      val shown = tracked
+      if ((shown == null && misses > 8) || (shown != null && spread(captured, shown) > 0.25f)) {
         armed = true
         capturedCorners = null
       }
     }
-    val progress = if (auto && armed && !capturing && corners != null) {
+    val progress = if (auto && armed && !capturing && tracked != null) {
       ((now - stableSince).toFloat() / AUTO_HOLD_MS).coerceIn(0f, 1f)
     } else {
       0f
     }
-    shutter.progress = progress
-    overlay.progress = progress
+    if (!capturing) {
+      shutter.progress = progress
+      overlay.progress = progress
+    }
     if (progress >= 1f) {
       takePhoto()
     }
   }
-
   private fun captureRotation(): Int {
     val screen = previewView.display?.rotation ?: Surface.ROTATION_0
     return when (deviceOrientation) {
@@ -631,6 +691,8 @@ class ScannerActivity : ComponentActivity() {
     }
   }
 
+  // Focuses and sets the exposure on the page first (for at most a little over a second), then
+  // takes the photo, so pages come out sharp.
   private fun takePhoto() {
     val capture = imageCapture ?: return
     if (capturing || (maxPages > 0 && pages.size >= maxPages)) {
@@ -638,9 +700,38 @@ class ScannerActivity : ComponentActivity() {
     }
     capturing = true
     armed = false
-    val previewCorners = corners
+    val previewCorners = corners?.copyOf()
     capturedCorners = previewCorners ?: capturedCorners
     val previewRotation = analysisRotation
+    shutter.progress = 1f
+    var started = false
+    val shoot = {
+      if (!started) {
+        started = true
+        shoot(capture, previewCorners, previewRotation)
+      }
+    }
+    val control = camera?.cameraControl
+    if (control == null) {
+      shoot()
+      return
+    }
+    val frame = fittedRect(previewView.width.toFloat(), previewView.height.toFloat(), frameAspect)
+    val centre = previewCorners?.let { points ->
+      floatArrayOf((points[0] + points[2] + points[4] + points[6]) / 4f, (points[1] + points[3] + points[5] + points[7]) / 4f)
+    } ?: floatArrayOf(0.5f, 0.5f)
+    val point = previewView.meteringPointFactory.createPoint(
+      frame.left + centre[0] * frame.width(),
+      frame.top + centre[1] * frame.height(),
+    )
+    val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+      .setAutoCancelDuration(3, TimeUnit.SECONDS)
+      .build()
+    control.startFocusAndMetering(action).addListener({ shoot() }, ContextCompat.getMainExecutor(this))
+    root.postDelayed({ shoot() }, 1300)
+  }
+
+  private fun shoot(capture: ImageCapture, previewCorners: FloatArray?, previewRotation: Int) {
     shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
     flashView.alpha = 0.8f
     flashView.animate().alpha(0f).setDuration(220).start()
@@ -661,6 +752,7 @@ class ScannerActivity : ComponentActivity() {
         }
         runOnUiThread {
           capturing = false
+          shutter.progress = 0f
           if (page != null) {
             added(page)
           }
@@ -668,11 +760,13 @@ class ScannerActivity : ComponentActivity() {
       }
 
       override fun onError(exception: ImageCaptureException) {
-        runOnUiThread { capturing = false }
+        runOnUiThread {
+          capturing = false
+          shutter.progress = 0f
+        }
       }
     })
   }
-
   // ---- Pages ----
 
   private fun decode(file: File, maxSide: Int): Bitmap {
