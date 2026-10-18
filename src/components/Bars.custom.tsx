@@ -5,24 +5,9 @@ import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors } from '../theme';
+import { openBarMenu as openMenu } from './bar-menu';
 import type { BarAction, BarItem } from './bar-types';
-import { showDialog } from './Dialogs';
 import { Icon } from './Icon';
-
-function openMenu(item: BarAction) {
-  showDialog({
-    kind: 'sheet',
-    title: item.label,
-    choices: (item.menu ?? []).map((entry) => ({
-      label: entry.label,
-      icon: entry.icon,
-      destructive: entry.destructive,
-      checked: entry.on,
-      disabled: entry.disabled,
-      onPress: entry.onPress,
-    })),
-  });
-}
 
 function Button({ item, compact, tight }: { item: BarAction; compact?: boolean; tight?: boolean }) {
   const tint = item.destructive ? colors.danger : colors.text;

@@ -1,12 +1,15 @@
-// The app's own pop-ups: option sheets, text prompts and confirmations, drawn in eDoc's style on
-// every platform. They arrive with a short spring and leave quickly; nothing bounces for long.
+// The app's own pop-ups: option sheets, text prompts, confirmations and a calendar, drawn in
+// eDoc's style on every platform. They arrive with a short spring and leave quickly; nothing
+// bounces for long. On iOS they are made of the system's frosted glass; sheets can be swiped down.
+import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -71,16 +74,33 @@ export type DateRequest = {
 
 type Request = PromptRequest | ConfirmRequest | SheetRequest | DateRequest;
 
-let present: ((request: Request) => void) | null = null;
+// Every mounted host, the newest last. Screens shown as native sheets have a host of their own,
+// since iOS cannot show a pop-up from a screen that is already showing a sheet.
+const hosts: ((request: Request) => void)[] = [];
 
 export function showDialog(request: Request) {
-  present?.(request);
+  hosts[hosts.length - 1]?.(request);
 }
 
 const SHEET_MAX_WIDTH = 520;
 const CARD_MAX_WIDTH = 400;
 const surface = '#0A1328';
 const tones = { danger: colors.danger, warning: colors.warning, accent: colors.accentSoft };
+// iOS draws the pop-ups in its frosted glass, tinted with eDoc's navy.
+const glass = Platform.OS === 'ios';
+const AnimatedBlur = Animated.createAnimatedComponent(BlurView);
+
+function Surface() {
+  if (!glass) {
+    return null;
+  }
+  return (
+    <>
+      <BlurView intensity={70} tint="systemThickMaterialDark" style={StyleSheet.absoluteFill} />
+      <View style={[StyleSheet.absoluteFill, styles.glassTint]} />
+    </>
+  );
+}
 
 export function DialogHost() {
   const insets = useSafeAreaInsets();
@@ -91,24 +111,49 @@ export function DialogHost() {
   const input = useRef<TextInput>(null);
   const backdrop = useRef(new Animated.Value(0)).current;
   const appear = useRef(new Animated.Value(0)).current;
+  // How far a sheet has been pulled down by the finger.
+  const drag = useRef(new Animated.Value(0)).current;
   const closing = useRef(false);
+  const dismiss = useRef(() => {});
+
+  // A sheet pulled down far enough (or flicked down) closes; otherwise it springs back.
+  const swipe = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) => gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+        onPanResponderMove: (_, gesture) => drag.setValue(Math.max(0, gesture.dy)),
+        onPanResponderRelease: (_, gesture) => {
+          if (gesture.dy > 90 || gesture.vy > 1.1) {
+            dismiss.current();
+          } else {
+            Animated.spring(drag, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 260 }).start();
+          }
+        },
+        onPanResponderTerminate: () => {
+          Animated.spring(drag, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 260 }).start();
+        },
+      }),
+    [drag],
+  );
 
   useEffect(() => {
-    present = (next) => {
+    const present = (next: Request) => {
       closing.current = false;
       setValue(next.kind === 'prompt' ? (next.initial ?? '') : '');
       setRequest(next);
       backdrop.setValue(0);
       appear.setValue(0);
+      drag.setValue(0);
       Animated.parallel([
         Animated.timing(backdrop, { toValue: 1, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
         Animated.spring(appear, { toValue: 1, damping: 22, stiffness: 260, mass: 0.9, useNativeDriver: true }),
       ]).start();
     };
+    hosts.push(present);
     return () => {
-      present = null;
+      hosts.splice(hosts.indexOf(present), 1);
     };
-  }, [backdrop, appear]);
+  }, [backdrop, appear, drag]);
 
   if (!request) {
     return null;
@@ -152,24 +197,37 @@ export function DialogHost() {
     finish(() => button.onPress?.(value));
   };
 
+  dismiss.current = cancel;
+
   const shade = (
-    <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdrop }]}>
+    <View style={StyleSheet.absoluteFill}>
+      {glass ? (
+        <AnimatedBlur
+          intensity={backdrop.interpolate({ inputRange: [0, 1], outputRange: [0, 22] })}
+          tint="dark"
+          style={StyleSheet.absoluteFill}
+        />
+      ) : null}
+      <Animated.View style={[StyleSheet.absoluteFill, glass ? styles.backdropGlass : styles.backdrop, { opacity: backdrop }]} />
       <Pressable style={StyleSheet.absoluteFill} onPress={cancel} accessibilityLabel="Close" />
-    </Animated.View>
+    </View>
   );
 
   if (request.kind === 'sheet') {
     // On a tablet the sheet keeps a phone-like width, centred at the bottom.
     const sheetWidth = Math.min(width - 20, SHEET_MAX_WIDTH);
+    // iOS sheets slide up from the bottom edge; elsewhere they rise a little and fade in.
+    const lift = appear.interpolate({ inputRange: [0, 1], outputRange: [glass ? 420 : 48, 0] });
     const rise = {
-      opacity: appear,
-      transform: [{ translateY: appear.interpolate({ inputRange: [0, 1], outputRange: [48, 0] }) }],
+      opacity: glass ? 1 : appear,
+      transform: [{ translateY: Animated.add(lift, drag) }],
     };
     return (
       <Modal transparent visible statusBarTranslucent navigationBarTranslucent animationType="none" onRequestClose={cancel}>
         {shade}
         <View pointerEvents="box-none" style={[styles.sheetArea, { paddingBottom: insets.bottom + 10 }]}>
-          <Animated.View style={[styles.sheet, { width: sheetWidth }, rise]}>
+          <Animated.View style={[styles.sheet, glass && styles.clear, { width: sheetWidth }, rise]} {...swipe.panHandlers}>
+            <Surface />
             <LinearGradient
               colors={[withAlpha(colors.accent, 0.16), withAlpha(colors.accent, 0)]}
               style={styles.glow}
@@ -221,7 +279,8 @@ export function DialogHost() {
             })}
           </Animated.View>
           <Animated.View style={[{ width: sheetWidth }, rise]}>
-            <Pressable onPress={cancel} style={({ pressed }) => [styles.cancel, pressed && styles.pressed]}>
+            <Pressable onPress={cancel} style={({ pressed }) => [styles.cancel, glass && styles.clear, pressed && styles.pressed]}>
+              <Surface />
               <Text style={styles.cancelText}>Cancel</Text>
             </Pressable>
           </Animated.View>
@@ -241,7 +300,8 @@ export function DialogHost() {
       <Modal transparent visible statusBarTranslucent navigationBarTranslucent animationType="none" onRequestClose={cancel}>
         {shade}
         <View pointerEvents="box-none" style={styles.centred}>
-          <Animated.View style={[styles.card, { width: cardWidth }, pop]}>
+          <Animated.View style={[styles.card, glass && styles.clear, { width: cardWidth }, pop]}>
+            <Surface />
             <LinearGradient
               colors={[withAlpha(colors.accent, 0.14), withAlpha(colors.accent, 0)]}
               style={styles.glow}
@@ -279,7 +339,8 @@ export function DialogHost() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         pointerEvents="box-none"
         style={styles.centred}>
-        <Animated.View style={[styles.card, { width: cardWidth }, pop]}>
+        <Animated.View style={[styles.card, glass && styles.clear, { width: cardWidth }, pop]}>
+          <Surface />
           <LinearGradient colors={[withAlpha(tone, 0.14), withAlpha(tone, 0)]} style={styles.glow} pointerEvents="none" />
           {request.kind === 'confirm' && request.icon ? (
             <View style={[styles.badge, { backgroundColor: withAlpha(tone, 0.16), borderColor: withAlpha(tone, 0.35) }]}>
@@ -540,6 +601,15 @@ const styles = StyleSheet.create({
   backdrop: {
     backgroundColor: 'rgba(1, 4, 12, 0.72)',
   },
+  backdropGlass: {
+    backgroundColor: 'rgba(1, 4, 12, 0.42)',
+  },
+  clear: {
+    backgroundColor: 'transparent',
+  },
+  glassTint: {
+    backgroundColor: 'rgba(8, 16, 36, 0.55)',
+  },
   pressed: {
     backgroundColor: colors.glassStrong,
   },
@@ -615,6 +685,7 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
     backgroundColor: surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.hairlineStrong,

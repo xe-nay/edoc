@@ -1,29 +1,11 @@
-// Native navigation bar buttons and bottom toolbar (system glass on iOS 26).
+// Native navigation bar buttons and bottom toolbar (system glass on iOS 26). Buttons with a menu
+// open the app's own menu sheet, so menus look the same everywhere in the app.
 import { Stack } from 'expo-router';
 
+import { tap } from '../native-ui';
 import { colors } from '../theme';
+import { openBarMenu } from './bar-menu';
 import type { BarAction, BarItem } from './bar-types';
-
-function renderMenuEntry(entry: BarAction, index: number) {
-  if (entry.menu) {
-    return (
-      <Stack.Toolbar.Menu key={index} icon={entry.icon} title={entry.label}>
-        {entry.menu.map(renderMenuEntry)}
-      </Stack.Toolbar.Menu>
-    );
-  }
-  return (
-    <Stack.Toolbar.MenuAction
-      key={index}
-      icon={entry.icon}
-      destructive={entry.destructive}
-      disabled={entry.disabled}
-      isOn={entry.on}
-      onPress={entry.onPress}>
-      {entry.label}
-    </Stack.Toolbar.MenuAction>
-  );
-}
 
 function renderItem(item: BarItem, index: number) {
   if (item === 'space') {
@@ -31,13 +13,6 @@ function renderItem(item: BarItem, index: number) {
   }
   if (item === 'search') {
     return <Stack.Toolbar.SearchBarSlot key={index} />;
-  }
-  if (item.menu) {
-    return (
-      <Stack.Toolbar.Menu key={index} icon={item.icon} accessibilityLabel={item.label}>
-        {item.menu.map(renderMenuEntry)}
-      </Stack.Toolbar.Menu>
-    );
   }
   return (
     <Stack.Toolbar.Button
@@ -47,7 +22,14 @@ function renderItem(item: BarItem, index: number) {
       variant={item.prominent ? 'prominent' : 'plain'}
       tintColor={item.destructive ? colors.danger : undefined}
       disabled={item.disabled}
-      onPress={item.onPress}
+      onPress={
+        item.menu
+          ? () => {
+              tap();
+              openBarMenu(item);
+            }
+          : item.onPress
+      }
     />
   );
 }
