@@ -58,9 +58,13 @@ jobs:
         run: npx expo prebuild --platform ios --no-install
 
       # The page-flattening model (UVDoc, MIT License) converted to Core ML; the app includes it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Prepare the page-flattening model
         run: |
-          python3 -m venv /tmp/convert
+          python -m venv /tmp/convert
           /tmp/convert/bin/pip install --quiet torch==2.7.1 coremltools==9.0
           git clone --depth 1 https://github.com/tanguymagne/UVDoc /tmp/UVDoc
           /tmp/convert/bin/python scripts/export-flatten-coreml.py /tmp/UVDoc /tmp/PageFlatten.mlpackage
